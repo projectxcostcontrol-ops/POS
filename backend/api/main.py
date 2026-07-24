@@ -24,6 +24,7 @@ from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
 from core.recipe_suggester import RecipeSuggester
+from core import variance as variance_lib
 from core.unit_conversion import apply_unit_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
@@ -714,6 +715,151 @@ def set_recipe(store_id: str, item_name: str, ingredients: list[dict],
     # would offer the same suggestion again over a recipe that's now real.
     c.store.delete_recipe_draft(store_id, item_name)
     return {"ok": True}
+
+
+# ---- stock counts and variance (step 3.4) ------------------------------
+
+DEFAULT_VARIANCE_PCT = 10.0
+DEFAULT_VARIANCE_VALUE = 200.0
+
+
+def _thresholds(c: Ctx) -> tuple[float, float]:
+    return (float(c.store.get_setting("variance_threshold_pct") or DEFAULT_VARIANCE_PCT),
+            float(c.store.get_setting("variance_threshold_value") or DEFAULT_VARIANCE_VALUE))
+
+
+@app.get("/api/{store_id}/counts")
+def list_count_sessions(store_id: str, c: Ctx = Depends(store_ctx)):
+    return c.store.list_count_sessions(store_id)
+
+
+@app.get("/api/{store_id}/counts/open")
+def get_open_count(store_id: str, c: Ctx = Depends(store_ctx)):
+    return c.store.open_count_session(store_id) or {}
+
+
+@app.post("/api/{store_id}/counts")
+def start_count(store_id: str, c: Ctx = Depends(store_ctx)):
+    """Only one count runs at a time - two open sessions would each hold a
+    different idea of the same shelf."""
+    existing = c.store.open_count_session(store_id)
+    if existing:
+        return existing
+    return c.store.create_count_session(store_id, _now())
+
+
+@app.put("/api/{store_id}/counts/{session_id}/entry")
+def set_count_entry(store_id: str, session_id: str, material_id: str, counted: float,
+                    c: Ctx = Depends(store_ctx)):
+    session = c.store.get_count_session(store_id, session_id)
+    if not session or session.get("status") != "open":
+        raise HTTPException(400, "รอบนับนี้ปิดไปแล้ว")
+    c.store.set_count_entry(store_id, session_id, material_id, counted)
+    return {"ok": True}
+
+
+@app.delete("/api/{store_id}/counts/{session_id}/entry")
+def clear_count_entry(store_id: str, session_id: str, material_id: str,
+                      c: Ctx = Depends(store_ctx)):
+    c.store.clear_count_entry(store_id, session_id, material_id)
+    return {"ok": True}
+
+
+@app.post("/api/{store_id}/counts/{session_id}/close")
+def close_count(store_id: str, session_id: str, c: Ctx = Depends(store_ctx)):
+    """Commits every counted line to the ledger in one go, tagged with this
+    session so the variance report can find exactly this count's
+    corrections later."""
+    session = c.store.get_count_session(store_id, session_id)
+    if not session:
+        raise HTTPException(404, "ไม่พบรอบนับนี้")
+    if session.get("status") != "open":
+        raise HTTPException(400, "รอบนับนี้ปิดไปแล้ว")
+    entries = session.get("entries") or {}
+    if not entries:
+        raise HTTPException(400, "ยังไม่ได้นับอะไรเลย")
+
+    closed_at = _now()
+    for material_id, counted in entries.items():
+        c.ledger.record_count(store_id, material_id, float(counted),
+                              note=f"รอบนับ {closed_at[:10]}")
+        # Tag it so variance can tell this count's correction from any
+        # other adjustment made on the same day.
+        movements = c.ledger.list_movements(store_id, material_id)
+        if movements:
+            latest = movements[0]
+            c.store._col(store_id, "stock_movements").document(latest["id"]).update({
+                "ref": session_id, "occurred_at": closed_at,
+            })
+
+    c.store.close_count_session(store_id, session_id, closed_at)
+    return {"ok": True, "counted": len(entries), "closed_at": closed_at}
+
+
+@app.get("/api/{store_id}/variance/{session_id}")
+def variance_report(store_id: str, session_id: str, c: Ctx = Depends(store_money)):
+    session = c.store.get_count_session(store_id, session_id)
+    if not session or session.get("status") != "closed":
+        raise HTTPException(400, "ต้องปิดรอบนับก่อนถึงจะวิเคราะห์ได้")
+
+    previous = c.store.previous_closed_session(store_id, session["closed_at"])
+    pct, value = _thresholds(c)
+    rows = variance_lib.analyse_session(
+        c.ledger, store_id, session, previous, c.store.list_materials(store_id),
+        threshold_pct=pct, threshold_value=value)
+
+    return {
+        "session": {"id": session["id"], "closed_at": session.get("closed_at")},
+        "previous_closed_at": (previous or {}).get("closed_at"),
+        "has_baseline": previous is not None,
+        "thresholds": {"pct": pct, "value": value},
+        "summary": variance_lib.summarise(rows),
+        "rows": rows,
+        "unmeasured_menus": _unmeasured_menus(c, store_id, session, previous),
+    }
+
+
+def _unmeasured_menus(c: Ctx, store_id: str, session: dict,
+                      previous: dict | None) -> list[str]:
+    """Menus sold in the period with no recipe behind them.
+
+    Their ingredients walked out of the kitchen unaccounted for, so they
+    land in the report as unexplained losses. If Loyverse can't be reached
+    we return nothing rather than a guess - an empty list here reads as
+    "none found", so it's better to be silent than wrong about which
+    menus are covered."""
+    try:
+        receipts = c.provider.get_receipts(
+            store_id, created_at_min=(previous or {}).get("closed_at"))
+    except Exception:
+        return []
+
+    end = session.get("closed_at")
+    sold = set()
+    for r in receipts:
+        if end and (r.get("created_at") or "") > end:
+            continue
+        for line in r.get("line_items", []):
+            name = line.get("item_name")
+            if name:
+                sold.add(name)
+
+    recipes = {name: c.store.get_recipe(store_id, name) for name in sold}
+    return variance_lib.unmeasured_menus(sold, recipes, c.store.list_recipe_skips(store_id))
+
+
+@app.get("/api/{store_id}/variance-settings")
+def get_variance_settings(store_id: str, c: Ctx = Depends(store_ctx)):
+    pct, value = _thresholds(c)
+    return {"pct": pct, "value": value}
+
+
+@app.post("/api/{store_id}/variance-settings")
+def set_variance_settings(store_id: str, pct: float, value: float,
+                          c: Ctx = Depends(store_settings)):
+    c.store.set_setting("variance_threshold_pct", pct)
+    c.store.set_setting("variance_threshold_value", value)
+    return {"pct": pct, "value": value}
 
 
 # ---- expenses / receipts ----------------------------------------------
