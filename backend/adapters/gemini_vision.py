@@ -78,7 +78,16 @@ class GeminiVisionAdapter(VisionProvider):
                     }},
                 ]
             }],
-            "generationConfig": {"temperature": 0, "responseMimeType": "application/json"},
+            "generationConfig": {
+                "temperature": 0,
+                "responseMimeType": "application/json",
+                # A grocery delivery note can run to 30+ lines. The default
+                # output cap is far below what that costs in JSON, and when
+                # the model runs out mid-object the whole scan used to fail
+                # over a missing closing brace - after reading the invoice
+                # correctly. Room to finish is cheaper than that.
+                "maxOutputTokens": 8192,
+            },
         }
 
         url = f"{API_BASE}/{self.model}:generateContent"
@@ -100,8 +109,18 @@ class GeminiVisionAdapter(VisionProvider):
         if not resp.ok:
             raise VisionError(f"Gemini ตอบกลับ {resp.status_code}: {resp.text[:300]}")
 
-        raw_text = _extract_text(resp.json())
-        parsed = _parse_json(raw_text)
+        body = resp.json()
+        raw_text = _extract_text(body)
+        truncated = _hit_output_limit(body)
+        parsed, salvaged = _parse_json(raw_text, allow_salvage=truncated)
+
+        warning = None
+        if salvaged:
+            # Say so plainly. A short delivery note that silently lost its
+            # last two lines is worse than a failed scan, because nothing
+            # prompts anyone to look.
+            warning = ("AI อ่านใบนี้ไม่จบ (รายการยาวเกินไป) - "
+                       "รายการท้ายใบอาจขาดหายไป กรุณาเทียบกับรูปก่อนกด Confirm")
 
         return {
             "supplier": parsed.get("supplier"),
@@ -110,6 +129,7 @@ class GeminiVisionAdapter(VisionProvider):
             "items": _clean_items(parsed.get("items") or []),
             "raw_text": raw_text,
             "provider": self.name,
+            "warning": warning,
         }
 
 
@@ -122,28 +142,101 @@ def _extract_text(response: dict) -> str:
         raise VisionError(f"อ่านผลลัพธ์จาก Gemini ไม่ได้: {str(response)[:300]}") from e
 
 
-def _parse_json(text: str) -> dict:
-    """Models sometimes wrap JSON in a code fence or add a stray sentence
-    despite being told not to - salvage the JSON object rather than
-    failing the whole scan over formatting."""
+def _hit_output_limit(response: dict) -> bool:
+    """Did Gemini stop because it ran out of room rather than because it
+    finished? That distinction decides whether a broken JSON string is
+    garbage or just an unfinished good answer."""
+    try:
+        return response["candidates"][0].get("finishReason") == "MAX_TOKENS"
+    except (KeyError, IndexError):
+        return False
+
+
+def _parse_json(text: str, allow_salvage: bool = False) -> tuple[dict, bool]:
+    """Returns (parsed, was_salvaged).
+
+    Models sometimes wrap JSON in a code fence or add a stray sentence
+    despite being told not to - recover the JSON object rather than
+    failing the whole scan over formatting.
+
+    Salvage of a *truncated* reply is separate and deliberately gated on
+    allow_salvage: repairing malformed JSON on a guess would risk turning
+    a genuinely garbled answer into confident-looking data. We only do it
+    when Gemini has told us it stopped early, and even then we keep only
+    the line items that were completely written."""
     text = text.strip()
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fenced:
         text = fenced.group(1).strip()
 
     try:
-        return json.loads(text)
+        return json.loads(text), False
     except json.JSONDecodeError:
         pass
 
     brace = re.search(r"\{.*\}", text, re.DOTALL)
     if brace:
         try:
-            return json.loads(brace.group(0))
+            return json.loads(brace.group(0)), False
         except json.JSONDecodeError:
             pass
 
+    if allow_salvage:
+        repaired = _repair_truncated(text)
+        if repaired is not None:
+            return repaired, True
+
     raise VisionError(f"ผลลัพธ์ไม่ใช่ JSON ที่อ่านได้: {text[:300]}")
+
+
+def _repair_truncated(text: str) -> dict | None:
+    """Close off a reply that was cut mid-write, keeping every complete
+    item and discarding the half-written one at the end.
+
+    The header fields (supplier, invoice, date) come before the items in
+    the requested format, so they survive; what gets lost is the tail of
+    the list, which is exactly what the caller warns about."""
+    items_key = text.find('"items"')
+    if items_key == -1:
+        return None
+    open_bracket = text.find("[", items_key)
+    if open_bracket == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    last_complete_item = None
+
+    for i in range(open_bracket + 1, len(text)):
+        char = text[i]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                last_complete_item = i
+        elif char == "]" and depth == 0:
+            return None   # the array did close - truncation is elsewhere
+
+    if last_complete_item is None:
+        return None   # not even one whole item survived
+
+    try:
+        return json.loads(text[:last_complete_item + 1] + "]}")
+    except json.JSONDecodeError:
+        return None
 
 
 def _clean_items(items: list) -> list[dict]:
