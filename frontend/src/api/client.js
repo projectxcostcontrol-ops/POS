@@ -150,6 +150,23 @@ export const api = {
       method: 'PUT', body: JSON.stringify(ingredients),
     }),
 
+  // ---- stock counts & variance (3.4) ----
+  listCounts: (storeId) => request(`/api/${storeId}/counts`),
+  getOpenCount: (storeId) => request(`/api/${storeId}/counts/open`),
+  startCount: (storeId) => request(`/api/${storeId}/counts`, { method: 'POST' }),
+  setCountEntry: (storeId, sessionId, materialId, counted) =>
+    request(`/api/${storeId}/counts/${sessionId}/entry?material_id=${materialId}&counted=${counted}`,
+      { method: 'PUT' }),
+  clearCountEntry: (storeId, sessionId, materialId) =>
+    request(`/api/${storeId}/counts/${sessionId}/entry?material_id=${materialId}`,
+      { method: 'DELETE' }),
+  closeCount: (storeId, sessionId) =>
+    request(`/api/${storeId}/counts/${sessionId}/close`, { method: 'POST' }),
+  getVariance: (storeId, sessionId) => request(`/api/${storeId}/variance/${sessionId}`),
+  getVarianceSettings: (storeId) => request(`/api/${storeId}/variance-settings`),
+  saveVarianceSettings: (storeId, pct, value) =>
+    request(`/api/${storeId}/variance-settings?pct=${pct}&value=${value}`, { method: 'POST' }),
+
   getExpenses: (storeId, category) =>
     request(`/api/${storeId}/expenses${category ? `?category=${category}` : ''}`),
   addExpense: (storeId, { category, name, amount, date }) =>
