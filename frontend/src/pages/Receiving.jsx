@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store/StoreContext';
-import { api, BASE_URL } from '../api/client';
+import { api } from '../api/client';
 import { compressImage } from '../utils/imageCompress';
 
 export default function Receiving() {
@@ -124,20 +124,49 @@ export default function Receiving() {
   );
 }
 
-function ImagePreview({ src }) {
-  const [failed, setFailed] = useState(false);
+function ImagePreview({ storeId, draftId }) {
+  const [url, setUrl] = useState(null);
+  const [error, setError] = useState('');
 
-  if (failed) {
+  useEffect(() => {
+    let objectUrl = null;
+    let cancelled = false;
+
+    api.getDraftImageUrl(storeId, draftId)
+      .then((u) => {
+        if (cancelled) { URL.revokeObjectURL(u); return; }
+        objectUrl = u;
+        setUrl(u);
+      })
+      // Show what actually went wrong. Guessing "probably expired" was
+      // worse than saying nothing: the draft is minutes old, so that
+      // explanation sent the reader looking in the wrong place.
+      .catch((e) => !cancelled && setError(e.message));
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [storeId, draftId]);
+
+  if (error) {
     return (
       <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
-        (โหลดรูปไม่สำเร็จ - อาจถูกลบไปแล้วตามรอบ 7 วัน ใช้ข้อมูลที่ AI อ่านได้ด้านล่างแทน)
+        (โหลดรูปไม่สำเร็จ: {error} - ใช้ข้อมูลที่ AI อ่านได้ด้านล่างแทน)
+      </p>
+    );
+  }
+  if (!url) {
+    return (
+      <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+        กำลังโหลดรูป...
       </p>
     );
   }
 
   return (
     <div style={{ marginBottom: 12 }}>
-      <img src={src} alt="ใบส่งของที่สแกน" onError={() => setFailed(true)}
+      <img src={url} alt="ใบส่งของที่สแกน"
         style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)', display: 'block' }} />
       <p style={{ fontSize: 10, color: 'var(--text-muted)', margin: '4px 0 0' }}>
         รูปนี้จะถูกลบอัตโนมัติภายใน 7 วัน
@@ -255,8 +284,18 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
           ยังไม่มีอะไรเข้าสต๊อก - ตรวจแล้วกด Confirm ด้านล่างเมื่อพร้อม
         </p>
 
+        {draft.warning && (
+          <div style={{
+            background: 'var(--surface-1)', borderLeft: '3px solid var(--text-danger)',
+            borderRadius: 6, padding: '10px 12px', marginBottom: 12,
+            fontSize: 12, color: 'var(--text-danger)',
+          }}>
+            ⚠ {draft.warning}
+          </div>
+        )}
+
         {draft.image_path ? (
-          <ImagePreview src={`${BASE_URL}/api/${storeId}/receiving/drafts/${draft.id}/image`} />
+          <ImagePreview storeId={storeId} draftId={draft.id} />
         ) : (
           <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
             (ไม่มีรูปเก็บไว้ให้ดูเทียบ - ใช้ข้อมูลที่ AI อ่านได้ด้านล่างแทน)
