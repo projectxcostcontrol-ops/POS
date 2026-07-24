@@ -20,7 +20,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.fake_firestore import make_test_store
 from storage.movement_ledger import MovementLedger
-from core.variance import analyse_session, summarise, unmeasured_menus, _is_flagged
+from core.variance import (analyse_session, summarise, unmeasured_menus,
+                           count_offcycle_adjustments, _is_flagged)
 
 _results = []
 
@@ -203,6 +204,36 @@ def test_unmeasured_menus_are_named():
           unmeasured_menus({"ข้าวผัดกุ้ง"}, recipes, []), [])
 
 
+def test_offcycle_adjustments_are_counted():
+    section("Corrections made between counts are counted and reported")
+    # Each one absorbs part of the discrepancy before the count can see it,
+    # so the shortfall figure becomes a floor rather than a measurement.
+    # The report can't recover the lost amount - it can only refuse to
+    # present an understated number as if it were complete.
+    movements = [
+        {"kind": "count", "ref": None, "occurred_at": "2026-06-15T00:00:00"},   # last period
+        {"kind": "count", "ref": None, "occurred_at": "2026-07-03T00:00:00"},   # in window
+        {"kind": "count", "ref": None, "occurred_at": "2026-07-05T00:00:00"},   # in window
+        {"kind": "count", "ref": "s2", "occurred_at": "2026-07-08T00:00:00"},   # this count
+        {"kind": "count", "ref": "s3", "occurred_at": "2026-07-06T00:00:00"},   # another session
+        {"kind": "sale", "ref": None, "occurred_at": "2026-07-04T00:00:00"},    # not an adjustment
+        {"kind": "count", "ref": None, "occurred_at": "2026-07-20T00:00:00"},   # after the count
+    ]
+    check("only the untagged ones inside the window",
+          count_offcycle_adjustments(movements, "2026-07-01T00:00:00", "2026-07-08T00:00:00", "s2"), 2)
+    check("none when there were no adjustments",
+          count_offcycle_adjustments([], "2026-07-01T00:00:00", "2026-07-08T00:00:00", "s2"), 0)
+
+
+def test_adjustment_note_records_the_reason():
+    section("Why a number was changed is stored with it")
+    # Three months later the history is all anyone has; "แก้ไขจำนวนเป็น 4"
+    # with no reason is a dead end.
+    from storage.firestore_store import _adjust_note
+    check("reason included", _adjust_note(4.5, "กรอกผิด"), "แก้ไขจำนวนเป็น 4.5 (กรอกผิด)")
+    check("no reason given still reads sensibly", _adjust_note(4.5, ""), "แก้ไขจำนวนเป็น 4.5")
+
+
 def test_summary_totals():
     section("The headline figures")
     rows = [
@@ -278,6 +309,8 @@ def main():
     test_rows_are_ordered_by_money_lost()
     test_materials_deleted_since_the_count_are_skipped()
     test_unmeasured_menus_are_named()
+    test_offcycle_adjustments_are_counted()
+    test_adjustment_note_records_the_reason()
     test_summary_totals()
     test_count_sessions_stay_out_of_the_ledger_until_closed()
     test_only_one_count_runs_at_a_time()
