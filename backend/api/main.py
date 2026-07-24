@@ -24,7 +24,8 @@ from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
 from core.unit_conversion import apply_unit_conversion
-from storage.image_store import upload_receipt_image, delete_receipt_image, download_receipt_image
+from storage.image_store import (upload_receipt_image, delete_receipt_image,
+                                 download_receipt_image, storage_status)
 from core.auth import can, CAPABILITIES, OWNER, ROLES
 from api.deps import make_auth_dependencies
 
@@ -429,7 +430,7 @@ async def scan_invoice(store_id: str, file: UploadFile = File(...),
         store_id, supplier=scan.get("supplier"), invoice=scan.get("invoice"),
         date=scan.get("date"), items=items,
         raw_text=scan.get("raw_text", ""), provider=scan.get("provider", ""),
-        image_path=image_path,
+        image_path=image_path, warning=scan.get("warning"),
     )
 
 
@@ -442,6 +443,12 @@ def get_draft_image(store_id: str, draft_id: str, c: Ctx = Depends(store_ctx)):
         raise HTTPException(404, "ไม่พบรูปสำหรับร่างนี้")
     data, content_type = download_receipt_image(draft["image_path"])
     if data is None:
+        status = storage_status()
+        if status == "unconfigured":
+            raise HTTPException(503, "ยังไม่ได้ตั้งค่า Firebase Storage "
+                                     "(ตั้ง FIREBASE_STORAGE_BUCKET ที่ backend)")
+        if status == "emulator":
+            raise HTTPException(503, "โหมดทดสอบไม่ได้เก็บรูป")
         raise HTTPException(404, "รูปนี้อาจถูกลบไปแล้ว (เกิน 7 วัน) หรือดึงไม่สำเร็จ")
     return Response(content=data, media_type=content_type)
 
