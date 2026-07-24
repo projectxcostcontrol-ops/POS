@@ -1,0 +1,23 @@
+rules_version = '2';
+
+// Deny every direct client read and write.
+//
+// This is intentional and complete: the web app never touches Firestore
+// itself. It only uses Firebase for signing in, and every piece of data
+// goes through our backend, which checks the caller's role AND confines
+// them to their own business before touching anything.
+//
+// That makes these rules the second half of tenant isolation. The backend
+// can't be talked out of the tenant scope - but a client SDK holding a
+// valid login could read straight from Firestore and bypass it entirely
+// if the rules allowed it. They don't.
+//
+// The backend uses the Admin SDK, which is not subject to these rules, so
+// locking clients out costs the app nothing.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

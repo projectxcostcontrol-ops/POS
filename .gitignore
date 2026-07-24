@@ -1,0 +1,29 @@
+# Secrets - never commit these
+.env
+.env.local
+*-service-account.json
+firebase-service-account.json
+serviceAccountKey.json
+
+# Dependencies (rebuilt with npm install / pip install)
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+
+# Firebase emulator local data
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
