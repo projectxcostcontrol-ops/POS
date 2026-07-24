@@ -150,6 +150,30 @@ def summarise(rows: list[dict]) -> dict:
     }
 
 
+def count_offcycle_adjustments(movements: list[dict], start: str | None,
+                               end: str | None, session_id: str) -> int:
+    """Corrections made from the materials page between the two counts.
+
+    Each one silently absorbs part of whatever discrepancy had accumulated,
+    so the count that follows finds less missing than really went missing.
+    The report can't recover the lost amount, but it can say the figure is
+    a floor rather than a measurement - which is the difference between a
+    number someone can act on and one that quietly misleads them."""
+    count = 0
+    for m in movements:
+        if m.get("kind") != COUNT or m.get("ref") == session_id:
+            continue
+        if m.get("ref"):
+            continue   # belongs to some other counting session
+        at = m.get("occurred_at") or ""
+        if start and at <= start:
+            continue
+        if end and at > end:
+            continue
+        count += 1
+    return count
+
+
 def unmeasured_menus(sold_item_names: set[str], recipes: dict,
                      skipped: list[str]) -> list[str]:
     """Menus that sold during the period but have no recipe.
