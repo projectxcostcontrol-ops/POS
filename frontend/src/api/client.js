@@ -106,6 +106,27 @@ export const api = {
     request(`/api/${storeId}/receiving/convert-unit?material_id=${materialId}`,
       { method: 'POST', body: JSON.stringify(item) }),
 
+  /**
+   * The receipt photo can't be loaded by pointing an <img> at the endpoint:
+   * a plain <img> request carries no headers, so it arrives at the backend
+   * with no Authorization and gets rejected. Fetch it here instead, where
+   * the token can be attached, and hand back a blob URL the <img> can use.
+   * The caller must revokeObjectURL when it's done.
+   */
+  getDraftImageUrl: async (storeId, draftId) => {
+    const res = await fetch(
+      `${BASE_URL}/api/${storeId}/receiving/drafts/${draftId}/image`,
+      { headers: await authHeader() },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      let detail = text;
+      try { detail = JSON.parse(text).detail ?? text; } catch { /* plain text */ }
+      throw new ApiError(res.status, detail);
+    }
+    return URL.createObjectURL(await res.blob());
+  },
+
   getRecipe: (storeId, itemName) => request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`),
   setRecipe: (storeId, itemName, ingredients) =>
     request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`, {
