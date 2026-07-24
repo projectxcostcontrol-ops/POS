@@ -23,6 +23,7 @@ from core.stock_engine import sync_and_deduct
 from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
+from core.recipe_suggester import RecipeSuggester
 from core.unit_conversion import apply_unit_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
@@ -38,6 +39,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 # directly; every business endpoint works through a tenant-scoped view.
 root_store = Store()
 vision = build_default_chain()
+suggester = RecipeSuggester()
 
 current_claims, current_user, current_admin, _require, check_store_access = \
     make_auth_dependencies(root_store)
@@ -609,6 +611,94 @@ def remove_alias(store_id: str, material_id: str, alias: str, c: Ctx = Depends(s
     return {"ok": True}
 
 
+# ---- AI recipe suggestions (step 3.3) ----------------------------------
+# The model proposes which ingredients a dish uses. It never proposes how
+# much, because that depends on how this kitchen portions and a guessed
+# number is indistinguishable from a measured one once saved. The one
+# exception is resale goods, where selling one bottle consumes one bottle.
+
+def _suggest_for(c: Ctx, store_id: str, menu_names: list[str]) -> list[dict]:
+    """Runs the suggestion and attaches, for each proposed ingredient,
+    the material it matches in this branch's catalog - reusing the same
+    matching engine the invoice scanner uses, so wording learned there
+    pays off here too."""
+    suggestions = suggester.suggest(menu_names)
+    for entry in suggestions:
+        for ing in entry["ingredients"]:
+            ing["match"] = c.matcher.match(store_id, ing["name"])
+    return suggestions
+
+
+@app.get("/api/{store_id}/recipes/suggest/status")
+def suggest_status(store_id: str, c: Ctx = Depends(store_ctx)):
+    return {"available": suggester.available()}
+
+
+@app.post("/api/{store_id}/recipes/suggest")
+def suggest_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
+    """Draft one menu item. Returns the proposal without storing it - a
+    single item is reviewed immediately, so there's nothing to come back to."""
+    try:
+        result = _suggest_for(c, store_id, [item_name])
+    except VisionError as e:
+        raise HTTPException(502, str(e))
+    return result[0] if result else {"menu": item_name, "kind": "cooked", "ingredients": []}
+
+
+@app.post("/api/{store_id}/recipes/suggest-all")
+def suggest_all_recipes(store_id: str, data: dict, c: Ctx = Depends(store_ctx)):
+    """data: {item_names: [...]}. Drafts many at once and SAVES them, because
+    a batch is worked through over time rather than in one sitting. Saved
+    drafts change nothing on their own - each still has to be opened,
+    given quantities, and confirmed."""
+    names = [n for n in (data.get("item_names") or []) if n]
+    if not names:
+        raise HTTPException(400, "ไม่มีเมนูให้ร่าง")
+    if len(names) > 60:
+        # One request per menu costs tokens and time; past this it's better
+        # to do it in rounds than to sit on a request that may time out.
+        raise HTTPException(400, "ร่างได้ครั้งละไม่เกิน 60 เมนู - แบ่งเป็นหลายรอบ")
+
+    try:
+        suggestions = _suggest_for(c, store_id, names)
+    except VisionError as e:
+        raise HTTPException(502, str(e))
+
+    for entry in suggestions:
+        c.store.set_recipe_draft(store_id, entry["menu"], entry["kind"], entry["ingredients"])
+    return {"drafted": len(suggestions), "menus": suggestions}
+
+
+@app.get("/api/{store_id}/recipes/drafts")
+def list_recipe_drafts(store_id: str, c: Ctx = Depends(store_ctx)):
+    return c.store.list_recipe_drafts(store_id)
+
+
+@app.delete("/api/{store_id}/recipes/drafts/{item_name}")
+def delete_recipe_draft(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
+    c.store.delete_recipe_draft(store_id, item_name)
+    return {"ok": True}
+
+
+@app.get("/api/{store_id}/recipes/skips")
+def list_recipe_skips(store_id: str, c: Ctx = Depends(store_ctx)):
+    return c.store.list_recipe_skips(store_id)
+
+
+@app.post("/api/{store_id}/recipes/skips/{item_name}")
+def skip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
+    """Mark a menu item as one that legitimately has no recipe."""
+    c.store.skip_recipe(store_id, item_name)
+    c.store.delete_recipe_draft(store_id, item_name)
+    return {"ok": True}
+
+
+@app.delete("/api/{store_id}/recipes/skips/{item_name}")
+def unskip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
+    c.store.unskip_recipe(store_id, item_name)
+    return {"ok": True}
+
+
 # ---- recipes -----------------------------------------------------------
 
 @app.get("/api/{store_id}/recipes/{item_name}")
@@ -620,6 +710,9 @@ def get_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
 def set_recipe(store_id: str, item_name: str, ingredients: list[dict],
                c: Ctx = Depends(store_ctx)):
     c.store.set_recipe(store_id, item_name, ingredients)
+    # A confirmed recipe supersedes its draft - leaving the draft around
+    # would offer the same suggestion again over a recipe that's now real.
+    c.store.delete_recipe_draft(store_id, item_name)
     return {"ok": True}
 
 
