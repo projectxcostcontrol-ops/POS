@@ -127,6 +127,23 @@ export const api = {
     return URL.createObjectURL(await res.blob());
   },
 
+  // ---- AI recipe suggestions (3.3) ----
+  suggestStatus: (storeId) => request(`/api/${storeId}/recipes/suggest/status`),
+  suggestRecipe: (storeId, itemName) =>
+    request(`/api/${storeId}/recipes/suggest?item_name=${encodeURIComponent(itemName)}`,
+      { method: 'POST' }),
+  suggestAllRecipes: (storeId, itemNames) =>
+    request(`/api/${storeId}/recipes/suggest-all`,
+      { method: 'POST', body: JSON.stringify({ item_names: itemNames }) }),
+  listRecipeDrafts: (storeId) => request(`/api/${storeId}/recipes/drafts`),
+  deleteRecipeDraft: (storeId, itemName) =>
+    request(`/api/${storeId}/recipes/drafts/${encodeURIComponent(itemName)}`, { method: 'DELETE' }),
+  listRecipeSkips: (storeId) => request(`/api/${storeId}/recipes/skips`),
+  skipRecipe: (storeId, itemName) =>
+    request(`/api/${storeId}/recipes/skips/${encodeURIComponent(itemName)}`, { method: 'POST' }),
+  unskipRecipe: (storeId, itemName) =>
+    request(`/api/${storeId}/recipes/skips/${encodeURIComponent(itemName)}`, { method: 'DELETE' }),
+
   getRecipe: (storeId, itemName) => request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`),
   setRecipe: (storeId, itemName, ingredients) =>
     request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`, {
