@@ -381,6 +381,44 @@ class Store:
     def delete_draft(self, store_id: str, draft_id: str):
         self._col(store_id, "receiving_drafts").document(draft_id).delete()
 
+    # ---- AI recipe drafts (step 3.3) ----
+    # A draft is a proposal, not a recipe. It holds which ingredients a
+    # menu probably uses; the quantities are still blank because a person
+    # has to supply them. Nothing here affects stock or cost until it's
+    # saved as a real recipe, which is why drafts can sit here for days
+    # without doing harm.
+
+    def set_recipe_draft(self, store_id: str, item_name: str, kind: str,
+                         ingredients: list[dict]):
+        self._col(store_id, "recipe_drafts").document(item_name).set({
+            "item_name": item_name, "kind": kind, "ingredients": ingredients,
+        })
+
+    def get_recipe_draft(self, store_id: str, item_name: str) -> dict | None:
+        doc = self._col(store_id, "recipe_drafts").document(item_name).get()
+        return doc.to_dict() if doc.exists else None
+
+    def list_recipe_drafts(self, store_id: str) -> list[dict]:
+        return [d.to_dict() for d in self._col(store_id, "recipe_drafts").stream()]
+
+    def delete_recipe_draft(self, store_id: str, item_name: str):
+        self._col(store_id, "recipe_drafts").document(item_name).delete()
+
+    # ---- menu items deliberately excluded from recipes ----
+    # Service charges and the like never consume stock. Marking them keeps
+    # the "no recipe linked" warning meaningful: what's left flagged is
+    # genuinely forgotten, not a corkage fee. Without this the warning
+    # list fills with items that are fine, and then nobody reads it.
+
+    def skip_recipe(self, store_id: str, item_name: str):
+        self._col(store_id, "recipe_skips").document(item_name).set({"item_name": item_name})
+
+    def unskip_recipe(self, store_id: str, item_name: str):
+        self._col(store_id, "recipe_skips").document(item_name).delete()
+
+    def list_recipe_skips(self, store_id: str) -> list[str]:
+        return [d.id for d in self._col(store_id, "recipe_skips").stream()]
+
     # ---- recipes (menu item -> ingredient quantities) ----
     def get_recipe(self, store_id: str, item_name: str) -> list[dict]:
         doc = self._col(store_id, "recipes").document(item_name).get()
