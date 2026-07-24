@@ -111,6 +111,17 @@ export default function Variance() {
             </div>
           )}
 
+          {report.offcycle_adjustments > 0 && (
+            <div style={{
+              background: '#fdf3e3', border: '1px solid var(--text-warning)', borderRadius: 8,
+              padding: '10px 12px', marginBottom: 12, fontSize: 12, color: 'var(--text-warning)',
+            }}>
+              ⚠ มีการ "แก้ไขจำนวน" จากหน้าวัตถุดิบ {report.offcycle_adjustments} ครั้งในช่วงนี้ —
+              การแก้แต่ละครั้งกลบส่วนต่างที่สะสมอยู่ไปแล้วบางส่วน ตัวเลขด้านล่างจึงเป็น
+              <b>อย่างน้อยที่สุด</b> ของที่หายไปจริง ไม่ใช่ตัวเลขที่วัดได้ครบ
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
             <StatCard label="มูลค่าที่หายไป" value={`฿${report.summary.shortfall_value.toLocaleString()}`} />
             <StatCard label="เกินเกณฑ์" value={report.summary.flagged_count} />

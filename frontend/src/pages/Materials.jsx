@@ -14,6 +14,7 @@ export default function Materials() {
   const [recipeMap, setRecipeMap] = useState({});
   const [editing, setEditing] = useState(null);
   const [adjusting, setAdjusting] = useState(null);
+  const [adjustReason, setAdjustReason] = useState('กรอกผิด');
   const [adjustVal, setAdjustVal] = useState('');
   const [historyFor, setHistoryFor] = useState(null);
 
@@ -66,8 +67,9 @@ export default function Materials() {
   }
 
   async function saveAdjust() {
-    await api.adjustStock(storeId, adjusting.id, parseFloat(adjustVal) || 0);
+    await api.adjustStock(storeId, adjusting.id, parseFloat(adjustVal) || 0, adjustReason);
     setAdjusting(null);
+    setAdjustReason('กรอกผิด');
     load();
   }
 
@@ -156,7 +158,7 @@ export default function Materials() {
               </div>
               <button onClick={() => setHistoryFor(m)} style={{ fontSize: 12, padding: '6px 8px' }}>ประวัติ</button>
               <button onClick={() => { setAdjusting(m); setAdjustVal(String(m.stock ?? 0)); }}
-                style={{ fontSize: 12, padding: '6px 8px' }}>นับสต๊อก</button>
+                style={{ fontSize: 12, padding: '6px 8px' }}>แก้ไขจำนวน</button>
               <button onClick={() => setEditing(m)} style={{ fontSize: 12, padding: '6px 8px' }}>แก้ไข</button>
             </div>
           );
@@ -168,16 +170,31 @@ export default function Materials() {
       {adjusting && (
         <div className="modal-overlay" onClick={() => setAdjusting(null)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>นับสต๊อกจริง</p>
+            <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>แก้ไขจำนวน</p>
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 16px' }}>{adjusting.name}</p>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              จำนวนที่นับได้ ({adjusting.unit})
+              แก้เป็น ({adjusting.unit})
             </label>
             <input type="number" value={adjustVal} onChange={(e) => setAdjustVal(e.target.value)}
-              style={{ width: '100%', margin: '4px 0 8px' }} />
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 16px' }}>
-              ระบบจะบันทึกส่วนต่างไว้เป็นประวัติ ไม่ได้ลบข้อมูลเดิมทิ้ง
-            </p>
+              style={{ width: '100%', margin: '4px 0 12px' }} />
+
+            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>เหตุผล</label>
+            <select value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)}
+              style={{ width: '100%', margin: '4px 0 12px' }}>
+              <option value="กรอกผิด">กรอกผิด</option>
+              <option value="รับของแล้วลืมบันทึก">รับของแล้วลืมบันทึก</option>
+              <option value="อื่น ๆ">อื่น ๆ</option>
+            </select>
+
+            <div style={{
+              background: 'var(--surface-1)', borderRadius: 8, padding: '10px 12px',
+              marginBottom: 16, fontSize: 11, color: 'var(--text-secondary)',
+            }}>
+              การแก้ตรงนี้จะ<b>ไม่ถูกนับเป็นส่วนต่าง</b>ในรายงาน และจะกลบส่วนต่างที่สะสมอยู่ด้วย
+              <br />
+              ถ้ากำลังนับสต๊อกตามรอบ ให้ใช้หน้า{' '}
+              <a href="/stock-count" style={{ color: 'var(--accent)' }}>นับสต๊อก</a> แทน
+            </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setAdjusting(null)}>ยกเลิก</button>
               <button style={{ background: 'var(--surface-1)' }} onClick={saveAdjust}>บันทึก</button>
