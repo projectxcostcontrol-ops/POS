@@ -58,8 +58,9 @@ export const api = {
   getMaterials: (storeId) => request(`/api/${storeId}/materials`),
   upsertMaterial: (storeId, materialId, data) =>
     request(`/api/${storeId}/materials/${materialId}`, { method: 'PUT', body: JSON.stringify(data) }),
-  adjustStock: (storeId, materialId, newStock) =>
-    request(`/api/${storeId}/materials/${materialId}/adjust?new_stock=${newStock}`, { method: 'POST' }),
+  adjustStock: (storeId, materialId, newStock, reason = '') =>
+    request(`/api/${storeId}/materials/${materialId}/adjust?new_stock=${newStock}&reason=${encodeURIComponent(reason)}`,
+      { method: 'POST' }),
 
   getMovements: (storeId, materialId) =>
     request(`/api/${storeId}/materials/${materialId}/movements`),
