@@ -355,8 +355,9 @@ def upsert_material(store_id: str, material_id: str, data: dict, c: Ctx = Depend
 
 
 @app.post("/api/{store_id}/materials/{material_id}/adjust")
-def adjust_stock(store_id: str, material_id: str, new_stock: float, c: Ctx = Depends(store_ctx)):
-    c.store.adjust_stock(store_id, material_id, new_stock)
+def adjust_stock(store_id: str, material_id: str, new_stock: float, reason: str = "",
+                 c: Ctx = Depends(store_ctx)):
+    c.store.adjust_stock(store_id, material_id, new_stock, reason=reason)
     return {"ok": True}
 
 
@@ -816,6 +817,9 @@ def variance_report(store_id: str, session_id: str, c: Ctx = Depends(store_money
         "summary": variance_lib.summarise(rows),
         "rows": rows,
         "unmeasured_menus": _unmeasured_menus(c, store_id, session, previous),
+        "offcycle_adjustments": variance_lib.count_offcycle_adjustments(
+            c.ledger.list_movements(store_id),
+            (previous or {}).get("closed_at"), session.get("closed_at"), session["id"]),
     }
 
 
