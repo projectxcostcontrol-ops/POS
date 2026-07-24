@@ -47,11 +47,27 @@ def upload_receipt_image(store_id: str, image_bytes: bytes, content_type: str = 
         return None
 
 
+def storage_status() -> str:
+    """Why images might not be available: "emulator", "unconfigured", or
+    "ok". Collapsing these into a single None was what let the UI tell
+    people their photo had expired when in fact the bucket was never set
+    up - a confident explanation that sent them looking in the wrong
+    place. Naming the cause costs one call and saves that."""
+    if os.environ.get("USE_FIREBASE_EMULATOR", "false").lower() == "true":
+        return "emulator"
+    try:
+        from firebase_admin import storage
+        storage.bucket()
+        return "ok"
+    except Exception:
+        return "unconfigured"
+
+
 def download_receipt_image(path: str) -> tuple[bytes | None, str | None]:
     """Fetches the image back out of Storage server-to-server, for the
     backend to stream to the frontend. Returns (None, None) if storage
     isn't configured or the object is gone (e.g. past the 7-day
-    lifecycle rule) - the caller should treat that as "no image"."""
+    lifecycle rule); call storage_status() to tell those apart."""
     if os.environ.get("USE_FIREBASE_EMULATOR", "false").lower() == "true":
         return None, None
     try:

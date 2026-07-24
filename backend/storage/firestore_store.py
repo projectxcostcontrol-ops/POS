@@ -351,16 +351,21 @@ class Store:
     # ---- receiving drafts (step 4.3 - AI scan result awaiting review) ----
     def create_draft(self, store_id: str, supplier: str | None, invoice: str | None,
                      date: str | None, items: list[dict], raw_text: str = "",
-                     provider: str = "", image_path: str | None = None) -> dict:
+                     provider: str = "", image_path: str | None = None,
+                     warning: str | None = None) -> dict:
+        """`warning` travels with the draft so a caveat raised during the
+        scan is still in front of the user at the moment they confirm -
+        which is the only moment it can change what they do."""
         _, doc_ref = self._col(store_id, "receiving_drafts").add({
             "supplier": supplier, "invoice": invoice, "date": date,
             "items": items, "raw_text": raw_text, "provider": provider,
             "image_path": image_path,
+            "warning": warning,
             "status": "draft",
         })
         return {"id": doc_ref.id, "supplier": supplier, "invoice": invoice,
                 "date": date, "items": items, "status": "draft",
-                "image_path": image_path}
+                "image_path": image_path, "warning": warning}
 
     def get_draft(self, store_id: str, draft_id: str) -> dict | None:
         doc = self._col(store_id, "receiving_drafts").document(draft_id).get()
