@@ -13,7 +13,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from adapters.gemini_vision import _parse_json, _clean_items, _to_float
+from adapters.gemini_vision import (_parse_json, _clean_items, _to_float,
+                                    _repair_truncated, _hit_output_limit)
 from core.vision_chain import VisionChain
 from core.vision_provider import VisionProvider, VisionError
 
@@ -34,20 +35,20 @@ def section(title):
 
 def test_plain_json():
     section("Plain JSON parses")
-    out = _parse_json('{"supplier": "Makro", "items": []}')
+    out, _ = _parse_json('{"supplier": "Makro", "items": []}')
     check("supplier read", out["supplier"], "Makro")
 
 
 def test_json_in_code_fence():
     section("JSON wrapped in a markdown fence still parses")
     text = '```json\n{"supplier": "Makro", "items": []}\n```'
-    check("fence stripped", _parse_json(text)["supplier"], "Makro")
+    check("fence stripped", _parse_json(text)[0]["supplier"], "Makro")
 
 
 def test_json_with_surrounding_chatter():
     section("Model adds a sentence anyway - salvage the JSON")
     text = 'นี่คือผลลัพธ์ครับ:\n{"supplier": "ตลาดสด", "items": []}\nหวังว่าจะช่วยได้'
-    check("object extracted", _parse_json(text)["supplier"], "ตลาดสด")
+    check("object extracted", _parse_json(text)[0]["supplier"], "ตลาดสด")
 
 
 def test_unparseable_raises():
@@ -171,10 +172,67 @@ def test_chain_all_fail():
         check("names both providers", "gemini" in msg and "backup" in msg, True)
 
 
+def test_truncated_reply_is_salvaged_but_flagged():
+    section("A reply cut off mid-write keeps what was complete, and says so")
+    # A long grocery invoice can exhaust the output budget partway through
+    # the item list. Everything already written is good data - throwing the
+    # whole scan away over a missing brace wastes a correct reading.
+    truncated = ('{"supplier": "ซีพี แอ็กซ์ตร้า", "invoice": "0337", "date": "2026-07-01",'
+                 ' "items": [{"name": "น้ำมันพืช", "qty": 12, "unit": "ขวด", "price": 45},'
+                 ' {"name": "น้ำตาลทร')
+
+    parsed, salvaged = _parse_json(truncated, allow_salvage=True)
+    check("flagged as salvaged", salvaged, True)
+    check("header fields survive", parsed["invoice"], "0337")
+    check("complete item kept", len(parsed["items"]), 1)
+    check("half-written item dropped", parsed["items"][0]["name"], "น้ำมันพืช")
+
+
+def test_salvage_only_when_the_model_ran_out_of_room():
+    section("Broken JSON is NOT repaired on a guess - only when Gemini said it stopped early")
+    # Repairing anything that fails to parse would risk turning a genuinely
+    # garbled answer into data that looks confident. Salvage is gated on
+    # Gemini reporting MAX_TOKENS.
+    broken = '{"supplier": "ก", "items": [{"name": "ของ'
+    try:
+        _parse_json(broken, allow_salvage=False)
+        check("refuses to repair without the signal", False, True)
+    except VisionError:
+        check("refuses to repair without the signal", True, True)
+
+
+def test_salvage_refuses_when_nothing_is_complete():
+    section("If not even one item finished, there's nothing worth keeping")
+    check("no complete item -> no salvage",
+          _repair_truncated('{"supplier": "ก", "items": [{"name": "ครึ่ง'), None)
+
+
+def test_braces_inside_names_do_not_confuse_the_repair():
+    section("Product names containing braces or quotes don't break the scan")
+    tricky = '{"items": [{"name": "ของ {ใน} \\"วงเล็บ\\"", "qty": 2, "price": 5}, {"name": "ครึ่ง'
+    out = _repair_truncated(tricky)
+    check("one item recovered", len(out["items"]), 1)
+    check("name intact", out["items"][0]["name"], 'ของ {ใน} "วงเล็บ"')
+
+
+def test_output_limit_detection():
+    section("MAX_TOKENS is what distinguishes 'unfinished' from 'garbage'")
+    check("MAX_TOKENS detected",
+          _hit_output_limit({"candidates": [{"finishReason": "MAX_TOKENS"}]}), True)
+    check("normal stop not flagged",
+          _hit_output_limit({"candidates": [{"finishReason": "STOP"}]}), False)
+    check("missing field not flagged", _hit_output_limit({}), False)
+
+
 def main():
     print("Running vision tests (offline, no API key needed)")
 
     test_plain_json()
+    test_truncated_reply_is_salvaged_but_flagged()
+    test_salvage_only_when_the_model_ran_out_of_room()
+    test_salvage_refuses_when_nothing_is_complete()
+    test_braces_inside_names_do_not_confuse_the_repair()
+    test_output_limit_detection()
     test_json_in_code_fence()
     test_json_with_surrounding_chatter()
     test_unparseable_raises()
