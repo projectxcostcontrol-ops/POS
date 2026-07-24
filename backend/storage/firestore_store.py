@@ -226,11 +226,20 @@ class Store:
     def list_supplier_aliases(self, store_id: str) -> list[dict]:
         return [d.to_dict() | {"id": d.id} for d in self._col(store_id, "supplier_aliases").stream()]
 
-    def adjust_stock(self, store_id: str, material_id: str, new_stock: float):
-        """A physical count - recorded as a movement, not an overwrite, so we
-        keep the trail of what was counted and when."""
+    def adjust_stock(self, store_id: str, material_id: str, new_stock: float,
+                     reason: str = ""):
+        """A one-off correction - a typo, or a delivery someone forgot to
+        record. Deliberately NOT the same thing as a stock count.
+
+        A correction made between counts quietly absorbs whatever discrepancy
+        had built up, so the next count finds nothing wrong and the variance
+        report says everything balanced. That's the most dangerous kind of
+        wrong answer: confident and clean. It carries no session ref, which
+        is how the report tells these apart from counted corrections and
+        warns that its own figures may be understated."""
         from storage.movement_ledger import MovementLedger
-        MovementLedger(self).record_count(store_id, material_id, new_stock)
+        MovementLedger(self).record_count(store_id, material_id, new_stock,
+                                          note=_adjust_note(new_stock, reason))
 
     def deduct_stock(self, store_id: str, material_id: str, amount: float,
                      ref: str | None = None):
@@ -500,6 +509,13 @@ class Store:
 
     def mark_receipt_processed(self, store_id: str, receipt_number: str):
         self._col(store_id, "processed_receipts").document(receipt_number).set({"processed": True})
+
+
+def _adjust_note(new_stock: float, reason: str) -> str:
+    """Why someone changed a number matters more three months later than it
+    does today, when the history is all anyone has to go on."""
+    base = f"แก้ไขจำนวนเป็น {new_stock}"
+    return f"{base} ({reason})" if reason else base
 
 
 def _alias_key(supplier: str, normalized_name: str) -> str:
