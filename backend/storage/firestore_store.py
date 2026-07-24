@@ -381,6 +381,62 @@ class Store:
     def delete_draft(self, store_id: str, draft_id: str):
         self._col(store_id, "receiving_drafts").document(draft_id).delete()
 
+    # ---- stock count sessions (step 3.4) ----
+    # Counting a whole kitchen takes longer than one sitting, so a session
+    # stays open and saves as you go. Nothing reaches the ledger until it's
+    # closed - a half-finished count writing corrections would be worse
+    # than no count at all, because the untouched materials would read as
+    # "counted and correct".
+
+    def create_count_session(self, store_id: str, started_at: str) -> dict:
+        _, ref = self._col(store_id, "stock_counts").add({
+            "started_at": started_at, "closed_at": None,
+            "status": "open", "entries": {},
+        })
+        return {"id": ref.id, "started_at": started_at, "status": "open", "entries": {}}
+
+    def get_count_session(self, store_id: str, session_id: str) -> dict | None:
+        doc = self._col(store_id, "stock_counts").document(session_id).get()
+        return (doc.to_dict() | {"id": doc.id}) if doc.exists else None
+
+    def list_count_sessions(self, store_id: str) -> list[dict]:
+        sessions = [d.to_dict() | {"id": d.id}
+                    for d in self._col(store_id, "stock_counts").stream()]
+        sessions.sort(key=lambda s: s.get("started_at") or "", reverse=True)
+        return sessions
+
+    def open_count_session(self, store_id: str) -> dict | None:
+        for s in self.list_count_sessions(store_id):
+            if s.get("status") == "open":
+                return s
+        return None
+
+    def set_count_entry(self, store_id: str, session_id: str,
+                        material_id: str, counted: float):
+        doc_ref = self._col(store_id, "stock_counts").document(session_id)
+        entries = (doc_ref.get().to_dict() or {}).get("entries", {})
+        entries[material_id] = counted
+        doc_ref.update({"entries": entries})
+
+    def clear_count_entry(self, store_id: str, session_id: str, material_id: str):
+        doc_ref = self._col(store_id, "stock_counts").document(session_id)
+        entries = (doc_ref.get().to_dict() or {}).get("entries", {})
+        entries.pop(material_id, None)
+        doc_ref.update({"entries": entries})
+
+    def close_count_session(self, store_id: str, session_id: str, closed_at: str):
+        self._col(store_id, "stock_counts").document(session_id).update({
+            "status": "closed", "closed_at": closed_at,
+        })
+
+    def previous_closed_session(self, store_id: str, before: str) -> dict | None:
+        """The count immediately before this one - the start of the period
+        being measured."""
+        closed = [s for s in self.list_count_sessions(store_id)
+                  if s.get("status") == "closed" and (s.get("closed_at") or "") < before]
+        closed.sort(key=lambda s: s.get("closed_at") or "")
+        return closed[-1] if closed else None
+
     # ---- AI recipe drafts (step 3.3) ----
     # A draft is a proposal, not a recipe. It holds which ingredients a
     # menu probably uses; the quantities are still blank because a person
