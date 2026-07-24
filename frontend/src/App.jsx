@@ -10,6 +10,8 @@ import Items from './pages/Items';
 import Materials from './pages/Materials';
 import Receiving from './pages/Receiving';
 import Recipes from './pages/Recipes';
+import StockCount from './pages/StockCount';
+import Variance from './pages/Variance';
 import Receipts from './pages/Receipts';
 import IncomeExpense from './pages/IncomeExpense';
 import Settings from './pages/Settings';
@@ -26,6 +28,8 @@ const NAV = [
   { to: '/materials', label: 'วัตถุดิบและสต๊อก' },
   { to: '/receiving', label: 'รับของเข้า' },
   { to: '/recipes', label: 'สูตรอาหาร' },
+  { to: '/stock-count', label: 'นับสต๊อก' },
+  { to: '/variance', label: 'วิเคราะห์ส่วนต่าง', needs: 'view_money' },
   { to: '/receipts', label: 'รายการบิล', needs: 'view_money' },
   { to: '/income-expense', label: 'รายรับรายจ่าย', needs: 'view_money' },
   { to: '/users', label: 'ผู้ใช้งาน', needs: 'manage_users' },
@@ -118,6 +122,8 @@ function AppShell() {
             <Route path="/materials" element={<Materials />} />
             <Route path="/receiving" element={<Receiving />} />
             <Route path="/recipes" element={<Recipes />} />
+            <Route path="/stock-count" element={<StockCount />} />
+            <Route path="/variance" element={can('view_money') ? <Variance /> : <Navigate to={homePath} replace />} />
             <Route path="/receipts" element={can('view_money') ? <Receipts /> : <Navigate to={homePath} replace />} />
             <Route path="/income-expense" element={can('view_money') ? <IncomeExpense /> : <Navigate to={homePath} replace />} />
             <Route path="/users" element={can('manage_users') ? <Users /> : <Navigate to={homePath} replace />} />
