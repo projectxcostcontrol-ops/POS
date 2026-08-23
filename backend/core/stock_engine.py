@@ -87,9 +87,31 @@ def sync_branch(provider: PosProvider, store: Store, store_id: str,
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return _to_loyverse_time(datetime.now(timezone.utc))
+
+
+def _to_loyverse_time(dt: datetime) -> str:
+    """Format a timestamp the way the Loyverse API demands:
+    YYYY-MM-DDTHH:mm:ss.sssZ - milliseconds, and a literal Z.
+
+    Python's own isoformat() produces microseconds and a '+00:00' offset,
+    which Loyverse rejects outright with INVALID_VALUE. Since the cursor
+    is stored in exactly the form it will be sent in, getting this wrong
+    breaks every sync after the first, and the offline tests can't catch
+    it because they never call the real API."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") \
+        + f"{dt.microsecond // 1000:03d}Z"
 
 
 def _minus_seconds(iso: str, seconds: int) -> str:
-    dt = datetime.fromisoformat(iso.replace("Z", "+00:00")) - timedelta(seconds=seconds)
-    return dt.isoformat()
+    dt = _parse_time(iso) - timedelta(seconds=seconds)
+    return _to_loyverse_time(dt)
+
+
+def _parse_time(iso: str) -> datetime:
+    """Accepts both the Loyverse-style 'Z' suffix we now write and the
+    '+00:00' form written by earlier versions, so a cursor saved before
+    this fix is still readable rather than crashing the first sync after
+    an upgrade."""
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
