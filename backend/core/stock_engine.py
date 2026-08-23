@@ -73,6 +73,14 @@ def sync_branch(provider: PosProvider, store: Store, store_id: str,
         store.set_sync_cursor(store_id, now)
         return 0
 
+    # Normalize on READ, not just on write. A cursor saved by an earlier
+    # version is in Python's isoformat ('+00:00', microseconds), which
+    # Loyverse rejects with INVALID_VALUE - and because that rejection
+    # happens before the cursor is ever rewritten, the bad value would
+    # survive every future sync and the branch could never recover on its
+    # own. Converting here is what breaks that loop.
+    cursor = _to_loyverse_time(_parse_time(cursor))
+
     processed = sync_and_deduct(provider, store, store_id, created_at_min=cursor)
 
     # The cursor must never move backward. A sync fired again within the
@@ -81,8 +89,13 @@ def sync_branch(provider: PosProvider, store: Store, store_id: str,
     # now-minus-overlap as earlier than the cursor it already advanced to,
     # re-opening a window that was already covered. Clamping to the
     # existing cursor makes a rapid repeat a safe no-op instead.
+    #
+    # Compared as instants rather than strings: mixing the two textual
+    # formats would make max() compare '2' against '1' character by
+    # character and pick nonsense.
     candidate = _minus_seconds(now, overlap_seconds)
-    store.set_sync_cursor(store_id, max(candidate, cursor))
+    advanced = max(_parse_time(candidate), _parse_time(cursor))
+    store.set_sync_cursor(store_id, _to_loyverse_time(advanced))
     return processed
 
 
