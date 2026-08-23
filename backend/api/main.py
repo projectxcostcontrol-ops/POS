@@ -12,6 +12,7 @@ import os
 import secrets
 from datetime import datetime, timezone
 
+import requests
 from fastapi import FastAPI, HTTPException, UploadFile, File, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -884,7 +885,18 @@ def add_expense(store_id: str, category: str, name: str, amount: float, date: st
 @app.get("/api/{store_id}/receipts")
 def list_receipts(store_id: str, created_at_min: str | None = None,
                   c: Ctx = Depends(store_money)):
-    return c.provider.get_receipts(store_id, created_at_min=created_at_min)
+    """Defaults to the last 31 days - Loyverse's free plan won't return
+    anything older. A 402 with no results at all means the requested
+    window is entirely beyond the plan's reach, which is a billing fact
+    to explain rather than a server error to dump on the user."""
+    try:
+        return c.provider.get_receipts(store_id, created_at_min=created_at_min)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 402:
+            raise HTTPException(
+                402, "แพ็กเกจ Loyverse ที่ใช้อยู่ดูประวัติการขายย้อนหลังได้ไม่เกิน 31 วัน "
+                     "- ถ้าต้องการมากกว่านี้ ต้องสมัคร Unlimited sales history ที่ Loyverse")
+        raise
 
 
 @app.post("/api/{store_id}/sync")
@@ -894,7 +906,14 @@ def sync(store_id: str, c: Ctx = Depends(store_ctx)):
     establishes the cursor and reports 0 processed; that's correct, not
     broken - press again (or just wait for the next auto sync) to pull
     whatever's sold since."""
-    count = sync_branch(c.provider, c.store, store_id)
+    try:
+        count = sync_branch(c.provider, c.store, store_id)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 402:
+            raise HTTPException(
+                402, "แพ็กเกจ Loyverse ที่ใช้อยู่ดูประวัติการขายย้อนหลังได้ไม่เกิน 31 วัน "
+                     "- กด \"รีเซ็ตจุดซิงก์\" เพื่อเริ่มนับใหม่จากตอนนี้")
+        raise
     return {"processed_receipts": count}
 
 
