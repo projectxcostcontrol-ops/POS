@@ -9,6 +9,8 @@ Auth: Bearer token (Settings > Access Tokens in the Loyverse Back Office)
 
 import os
 import time
+from datetime import datetime, timedelta, timezone
+
 import requests
 
 BASE_URL = "https://api.loyverse.com/v1.0"
@@ -26,6 +28,18 @@ DEFAULT_TIMEOUT = (10, 30)
 # fires in normal use; it exists purely so a broken response fails loudly
 # instead of hanging just as silently as the missing timeout did.
 MAX_PAGES = 1000
+
+# Loyverse's free plan refuses receipts older than this with a 402. It's
+# their limit, not ours, but the fetch has to know about it: without a
+# default window every receipt query paginates backwards until the API
+# refuses, which is slow and tells us nothing we don't already know.
+FREE_PLAN_HISTORY_DAYS = 31
+
+
+def _days_ago(days: int) -> str:
+    """Loyverse's required timestamp format: YYYY-MM-DDTHH:mm:ss.sssZ."""
+    dt = datetime.now(timezone.utc) - timedelta(days=days)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
 class LoyverseClient:
@@ -59,14 +73,28 @@ class LoyverseClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _paginate(self, path: str, key: str, params: dict | None = None) -> list[dict]:
+    def _paginate(self, path: str, key: str, params: dict | None = None,
+                  stop_on_payment_required: bool = False) -> list[dict]:
         """Loop through cursor-based pagination until all records are
-        collected, or until MAX_PAGES is hit - see its comment above."""
+        collected, or until MAX_PAGES is hit - see its comment above.
+
+        `stop_on_payment_required` handles Loyverse's plan limits: a free
+        account refuses receipts older than 31 days with a 402 midway
+        through pagination. The pages already fetched are perfectly good
+        data, so throwing them away because the NEXT page was refused
+        would show an empty screen to someone whose recent sales loaded
+        fine. Stop and return what we have instead."""
         params = dict(params or {})
         params.setdefault("limit", 250)
         results = []
         for _ in range(MAX_PAGES):
-            data = self._get(path, params)
+            try:
+                data = self._get(path, params)
+            except requests.HTTPError as e:
+                status = e.response.status_code if e.response is not None else None
+                if stop_on_payment_required and status == 402 and results:
+                    return results
+                raise
             results.extend(data.get(key, []))
             cursor = data.get("cursor")
             if not cursor:
@@ -96,14 +124,20 @@ class LoyverseClient:
                       created_at_max: str | None = None) -> list[dict]:
         """
         created_at_min / created_at_max: ISO 8601 strings, e.g. '2026-07-01T00:00:00.000Z'
-        Omit both to pull everything (careful on a store with a lot of history).
+
+        With no created_at_min, this defaults to the last 31 days rather
+        than everything. Loyverse's free plan refuses receipts older than
+        that outright (402 PAYMENT_REQUIRED), so asking for more means
+        paginating until the API says no - slower, and it wastes calls to
+        learn something we already know. Accounts on Unlimited sales
+        history can pass an explicit created_at_min to reach further back.
         """
         params = {}
-        if created_at_min:
-            params["created_at_min"] = created_at_min
+        params["created_at_min"] = created_at_min or _days_ago(FREE_PLAN_HISTORY_DAYS)
         if created_at_max:
             params["created_at_max"] = created_at_max
-        return self._paginate("/receipts", "receipts", params)
+        return self._paginate("/receipts", "receipts", params,
+                              stop_on_payment_required=True)
 
     def get_employees(self) -> list[dict]:
         return self._paginate("/employees", "employees")
