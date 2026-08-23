@@ -41,6 +41,11 @@ function CreateBusiness({ onDone }) {
   const [displayName, setDisplayName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [status, setStatus] = useState(null);   // { open, slots_left, cap }
+
+  useEffect(() => {
+    api.signupStatus().then(setStatus).catch(() => setStatus(null));
+  }, []);
 
   async function submit(e) {
     e.preventDefault();
@@ -55,12 +60,34 @@ function CreateBusiness({ onDone }) {
     }
   }
 
+  // Known-full is shown before anyone types a name, rather than only on
+  // submit - the whole point of surfacing this is to save someone filling
+  // in a form that was always going to be rejected.
+  if (status && !status.open) {
+    return (
+      <div className="card">
+        <p style={{ fontSize: 18, fontWeight: 500, margin: '0 0 4px' }}>เปิดทดลองใช้งานเต็มแล้ว</p>
+        <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 4px' }}>
+          ตอนนี้มีร้านทดลองใช้งานครบ {status.cap} ร้านแล้วสำหรับช่วง Close Beta
+        </p>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+          ขอบคุณที่สนใจ Rankrua เร็ว ๆ นี้จะเปิดรับเพิ่มครับ
+        </p>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={submit} className="card">
       <p style={{ fontSize: 18, fontWeight: 500, margin: '0 0 4px' }}>สร้างบัญชีธุรกิจใหม่</p>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 20px' }}>
+      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
         ข้อมูลของธุรกิจคุณจะแยกจากร้านอื่นทั้งหมด และคุณจะเป็นเจ้าของบัญชีนี้
       </p>
+      {status && status.open && (
+        <p style={{ fontSize: 11, color: 'var(--text-warning)', margin: '0 0 16px' }}>
+          ช่วงทดลองใช้งาน (Close Beta) เหลือที่ว่างอีก {status.slots_left} ร้าน
+        </p>
+      )}
 
       <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ชื่อธุรกิจ / ชื่อร้าน</label>
       <input value={businessName} onChange={(e) => setBusinessName(e.target.value)}

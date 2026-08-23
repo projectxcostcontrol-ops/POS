@@ -57,6 +57,7 @@ Environment variables to set in the platform's dashboard:
 | `GEMINI_API_KEY` | for AI invoice reading (optional) |
 | `FIREBASE_STORAGE_BUCKET` | for receipt photos (optional, see last section) |
 | `SYNC_INTERVAL_SECONDS` | optional fallback; the live value is set per business on its own Settings page |
+| `MAX_TENANTS` | how many businesses may sign up (default 10, for the closed beta) — see below |
 
 Do **not** set `FIRESTORE_EMULATOR_HOST` or `FIREBASE_AUTH_EMULATOR_HOST` in
 production - if either is present, the backend tries to verify logins against
@@ -76,6 +77,17 @@ sees the link. Leave it empty to disable the page entirely.
 The admin view deliberately exposes only counts - there's no endpoint that
 opens a customer's stock, recipes, or takings. The promise that each
 restaurant's data is private has to hold against us too.
+
+### `MAX_TENANTS` (closed beta)
+
+Caps how many separate businesses can sign up. Only the "create a new
+business" door is capped; someone joining an existing business through an
+invite link is never blocked by it, so an owner can always finish adding
+their staff. The signup screen reads the remaining count and says how many
+slots are left - or shows a "full" message instead of a form, so nobody
+fills one in that was always going to be rejected.
+
+Raise the number (or set it very high) to open signups up.
 
 ### Option A: Koyeb (no sleep on the free tier)
 
@@ -138,6 +150,23 @@ a 404 instead of the signup screen.
 
 Every further business that signs up repeats steps 2-6 for itself, with its
 own Loyverse token and its own separate data.
+
+### A note on the first sync
+
+The first "ซิงก์ตอนนี้" after connecting a branch reports **0 receipts
+processed**, and that is correct rather than broken. Each branch keeps a
+sync cursor; the first sync sets it to "now" and fetches nothing, so a
+branch with months of Loyverse history never triggers a full-history pull
+(which is slow enough to look like a hang). From then on each sync only
+asks for receipts since the last one.
+
+This is also the right business behaviour: a sale from before the branch
+had recipes has no ingredients to deduct, so there was never anything
+useful to fetch from before it connected.
+
+If a cursor ever ends up stuck or wrong, **Settings → รีเซ็ตจุดซิงก์**
+re-establishes it at "now", exactly like a fresh connection. It does not
+back-fill anything skipped in between.
 
 ---
 

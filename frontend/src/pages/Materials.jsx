@@ -68,8 +68,8 @@ export default function Materials() {
 
   async function saveAdjust() {
     await api.adjustStock(storeId, adjusting.id, parseFloat(adjustVal) || 0, adjustReason);
-    setAdjusting(null);
     setAdjustReason('กรอกผิด');
+    setAdjusting(null);
     load();
   }
 

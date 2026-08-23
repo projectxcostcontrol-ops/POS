@@ -74,9 +74,6 @@ def test_draft_stores_image_fields_when_present():
 
 def test_storage_status_names_the_cause():
     section("A missing image says WHY - config vs genuinely expired")
-    # The UI used to tell people their photo had aged out after 7 days when
-    # the bucket had simply never been configured. Both looked identical to
-    # the caller, so the wrong explanation was the confident one.
     os.environ["USE_FIREBASE_EMULATOR"] = "true"
     import importlib
     from storage import image_store
@@ -84,8 +81,6 @@ def test_storage_status_names_the_cause():
     check("emulator mode is reported as such", image_store.storage_status(), "emulator")
 
     os.environ["USE_FIREBASE_EMULATOR"] = "false"
-    # No firebase_admin app is initialized in this test process, so
-    # storage.bucket() raises - which is exactly the unconfigured case.
     check("no bucket configured is reported as such",
           image_store.storage_status(), "unconfigured")
     os.environ["USE_FIREBASE_EMULATOR"] = "true"

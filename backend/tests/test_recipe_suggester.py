@@ -37,9 +37,6 @@ def section(title):
 
 def test_quantities_are_never_filled_for_cooked_dishes():
     section("A cooked dish comes back with NO quantity - the core promise")
-    # If the model volunteers "200" for rice, it must not survive to the
-    # form. Once saved, a guessed 200 looks exactly like a measured 200,
-    # and it drives both stock deduction and gross profit from then on.
     ingredients = _clean_ingredients(
         [{"name": "ข้าวสวย", "unit": "กรัม", "qty": 200},
          {"name": "กุ้ง", "unit": "กรัม", "qty": 80}], "cooked")
@@ -54,9 +51,6 @@ def test_quantities_are_never_filled_for_cooked_dishes():
 
 def test_resale_items_get_a_one_to_one_recipe():
     section("Resale goods DO get a quantity - selling one bottle uses one bottle")
-    # This isn't a portioning judgement, so there's nothing to get wrong.
-    # Filling it in is what lets bought-in stock be tracked and earn a real
-    # margin instead of being written off as "no recipe needed".
     ingredients = _clean_ingredients([{"name": "น้ำเปล่า 600ml", "unit": "ขวด"}], "resale")
 
     check("one line", len(ingredients), 1)
@@ -71,10 +65,6 @@ def test_service_items_have_no_ingredients():
 
 def test_ingredients_are_matched_back_by_name_not_order():
     section("Answers are matched by menu name - order is never trusted")
-    # A model that reorders its reply would otherwise attach one dish's
-    # ingredients to another. That failure is silent and reads perfectly
-    # well: pork under a chicken dish looks like a normal recipe right up
-    # until the wrong stock starts moving.
     requested = ["ข้าวผัดหมู", "ข้าวผัดไก่"]
     returned = [
         {"menu": "ข้าวผัดไก่", "kind": "cooked", "ingredients": [{"name": "ไก่", "unit": "กรัม"}]},
@@ -89,9 +79,6 @@ def test_ingredients_are_matched_back_by_name_not_order():
 
 def test_menus_the_model_skipped_still_come_back():
     section("Every requested menu gets an entry, even one the model ignored")
-    # Returning fewer entries than asked for would leave the UI silently
-    # missing a dish, which reads as "AI found nothing" rather than
-    # "AI didn't answer".
     aligned = _align_to_request(
         ["ต้มยำกุ้ง", "แกงเขียวหวาน"],
         [{"menu": "ต้มยำกุ้ง", "kind": "cooked", "ingredients": [{"name": "กุ้ง", "unit": "กรัม"}]}])
@@ -103,9 +90,6 @@ def test_menus_the_model_skipped_still_come_back():
 
 def test_renamed_menus_are_not_guessed_at():
     section("A menu the model reworded is dropped rather than fuzzy-matched")
-    # Half-matching "ข้าวผัด" to "ข้าวผัดกุ้งพิเศษ" would be a guess about
-    # which dish was meant. An empty suggestion costs a few keystrokes;
-    # the wrong ingredients cost wrong stock.
     aligned = _align_to_request(
         ["ข้าวผัดกุ้งพิเศษ"],
         [{"menu": "ข้าวผัด", "kind": "cooked", "ingredients": [{"name": "ข้าว", "unit": "กรัม"}]}])
@@ -116,9 +100,6 @@ def test_renamed_menus_are_not_guessed_at():
 
 def test_unknown_kind_falls_back_to_cooked():
     section("An unrecognized kind becomes 'cooked' - the option that fills nothing in")
-    # Falling back to "resale" would prefill a quantity of 1 on a dish that
-    # isn't resale at all. Defaulting to the cautious option keeps a bad
-    # label from becoming a bad number.
     aligned = _align_to_request(
         ["อะไรสักอย่าง"],
         [{"menu": "อะไรสักอย่าง", "kind": "ของแปลก",
@@ -171,9 +152,6 @@ def test_drafts_and_skips_are_stored_per_branch():
 
 def test_skips_keep_the_missing_recipe_warning_meaningful():
     section("Skipping a service charge is remembered")
-    # The point of skipping isn't to hide work - it's to keep the
-    # "no recipe linked" warning trustworthy. A warning list padded with
-    # corkage fees is a list nobody checks.
     store = make_test_store()
     store.skip_recipe("branch1", "ค่าเปิดขวด")
 

@@ -203,6 +203,31 @@ def test_processed_receipts_do_not_collide():
     check("B has not processed 1-1001", b.is_receipt_processed("branch1", "1-1001"), False)
 
 
+def test_closed_beta_tenant_cap():
+    section("The cap check counts tenants the same way the admin overview does")
+    # main.py can't be imported here (no fastapi in this offline harness),
+    # so this exercises the exact primitive the /api/signup/business and
+    # /api/signup/status endpoints both call: root_store.list_tenants().
+    # Their cap logic is `len(list_tenants()) >= MAX_TENANTS` - a one-line
+    # check with nothing else to unit-test in isolation from FastAPI, so
+    # this test's job is to confirm list_tenants() counts correctly as
+    # tenants are added, which is what that comparison depends on.
+    store = make_test_store()
+    cap = 2
+
+    check("under cap with 0 tenants", len(store.list_tenants()) < cap, True)
+    store.create_tenant("ร้านที่ 1", owner_uid="u1", created_at="2026-07-01T00:00:00")
+    check("under cap with 1 tenant", len(store.list_tenants()) < cap, True)
+    store.create_tenant("ร้านที่ 2", owner_uid="u2", created_at="2026-07-02T00:00:00")
+    check("at cap with 2 tenants (cap=2)", len(store.list_tenants()) >= cap, True)
+
+    # Joining by invite never calls create_tenant, so it was never subject
+    # to this check in the first place.
+    before = len(store.list_tenants())
+    store.set_user("u3", "staff@example.com", "staff", "t1", [])
+    check("joining an existing tenant doesn't add one", len(store.list_tenants()), before)
+
+
 def main():
     print("Running multi-tenant isolation tests (offline)")
 
@@ -219,6 +244,7 @@ def main():
     test_image_paths_are_scoped_by_business()
     test_super_admin_is_not_a_role()
     test_processed_receipts_do_not_collide()
+    test_closed_beta_tenant_cap()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

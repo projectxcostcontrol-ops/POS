@@ -390,6 +390,91 @@ class Store:
     def delete_draft(self, store_id: str, draft_id: str):
         self._col(store_id, "receiving_drafts").document(draft_id).delete()
 
+    # ---- recipes (menu item -> ingredient quantities) ----
+    def get_recipe(self, store_id: str, item_name: str) -> list[dict]:
+        doc = self._col(store_id, "recipes").document(item_name).get()
+        return (doc.to_dict() or {}).get("ingredients", [])
+
+    def set_recipe(self, store_id: str, item_name: str, ingredients: list[dict]):
+        self._col(store_id, "recipes").document(item_name).set({"ingredients": ingredients})
+
+    # ---- expenses ----
+    def add_expense(self, store_id: str, category: str, name: str, amount: float, date: str):
+        self._col(store_id, "expenses").add({
+            "category": category, "name": name, "amount": amount, "date": date,
+        })
+
+    def list_expenses(self, store_id: str, category: str | None = None) -> list[dict]:
+        col = self._col(store_id, "expenses")
+        query = col.where("category", "==", category) if category else col
+        return [d.to_dict() | {"id": d.id} for d in query.stream()]
+
+    # ---- processed receipts (avoid double-deducting stock on re-sync) ----
+    def is_receipt_processed(self, store_id: str, receipt_number: str) -> bool:
+        return self._col(store_id, "processed_receipts").document(receipt_number).get().exists
+
+    def mark_receipt_processed(self, store_id: str, receipt_number: str):
+        self._col(store_id, "processed_receipts").document(receipt_number).set({"processed": True})
+
+    # ---- sync cursor (avoid re-pulling a branch's entire sales history) ----
+    # Without this, every sync - manual or automatic - asks Loyverse for
+    # every receipt since the branch's first day on Loyverse, then checks
+    # each one against processed_receipts. That's fine for a test store with
+    # a handful of receipts; for a real branch with months of history it's
+    # thousands of API calls and Firestore reads on every single sync, which
+    # is what "syncing... stuck" looks like from the outside - it isn't
+    # frozen, it's working through a backlog nothing needed it to fetch.
+    #
+    # The cursor also encodes a deliberate business decision, not just a
+    # performance one: a receipt from before this branch had recipes or
+    # tracked stock has nothing to deduct against, so there was never a
+    # reason to fetch it. A newly connected branch starts counting from the
+    # moment it connects, not from its entire Loyverse history.
+    def get_sync_cursor(self, store_id: str) -> str | None:
+        doc = self._col(store_id, "sync_state").document("cursor").get()
+        return (doc.to_dict() or {}).get("synced_up_to") if doc.exists else None
+
+    def set_sync_cursor(self, store_id: str, synced_up_to: str):
+        self._col(store_id, "sync_state").document("cursor").set({"synced_up_to": synced_up_to})
+
+    # ---- AI recipe drafts (step 3.3) ----
+    # A draft is a proposal, not a recipe. It holds which ingredients a
+    # menu probably uses; the quantities are still blank because a person
+    # has to supply them. Nothing here affects stock or cost until it's
+    # saved as a real recipe, which is why drafts can sit here for days
+    # without doing harm.
+
+    def set_recipe_draft(self, store_id: str, item_name: str, kind: str,
+                         ingredients: list[dict]):
+        self._col(store_id, "recipe_drafts").document(item_name).set({
+            "item_name": item_name, "kind": kind, "ingredients": ingredients,
+        })
+
+    def get_recipe_draft(self, store_id: str, item_name: str) -> dict | None:
+        doc = self._col(store_id, "recipe_drafts").document(item_name).get()
+        return doc.to_dict() if doc.exists else None
+
+    def list_recipe_drafts(self, store_id: str) -> list[dict]:
+        return [d.to_dict() for d in self._col(store_id, "recipe_drafts").stream()]
+
+    def delete_recipe_draft(self, store_id: str, item_name: str):
+        self._col(store_id, "recipe_drafts").document(item_name).delete()
+
+    # ---- menu items deliberately excluded from recipes ----
+    # Service charges and the like never consume stock. Marking them keeps
+    # the "no recipe linked" warning meaningful: what's left flagged is
+    # genuinely forgotten, not a corkage fee. Without this the warning
+    # list fills with items that are fine, and then nobody reads it.
+
+    def skip_recipe(self, store_id: str, item_name: str):
+        self._col(store_id, "recipe_skips").document(item_name).set({"item_name": item_name})
+
+    def unskip_recipe(self, store_id: str, item_name: str):
+        self._col(store_id, "recipe_skips").document(item_name).delete()
+
+    def list_recipe_skips(self, store_id: str) -> list[str]:
+        return [d.id for d in self._col(store_id, "recipe_skips").stream()]
+
     # ---- stock count sessions (step 3.4) ----
     # Counting a whole kitchen takes longer than one sitting, so a session
     # stays open and saves as you go. Nothing reaches the ledger until it's
@@ -445,70 +530,6 @@ class Store:
                   if s.get("status") == "closed" and (s.get("closed_at") or "") < before]
         closed.sort(key=lambda s: s.get("closed_at") or "")
         return closed[-1] if closed else None
-
-    # ---- AI recipe drafts (step 3.3) ----
-    # A draft is a proposal, not a recipe. It holds which ingredients a
-    # menu probably uses; the quantities are still blank because a person
-    # has to supply them. Nothing here affects stock or cost until it's
-    # saved as a real recipe, which is why drafts can sit here for days
-    # without doing harm.
-
-    def set_recipe_draft(self, store_id: str, item_name: str, kind: str,
-                         ingredients: list[dict]):
-        self._col(store_id, "recipe_drafts").document(item_name).set({
-            "item_name": item_name, "kind": kind, "ingredients": ingredients,
-        })
-
-    def get_recipe_draft(self, store_id: str, item_name: str) -> dict | None:
-        doc = self._col(store_id, "recipe_drafts").document(item_name).get()
-        return doc.to_dict() if doc.exists else None
-
-    def list_recipe_drafts(self, store_id: str) -> list[dict]:
-        return [d.to_dict() for d in self._col(store_id, "recipe_drafts").stream()]
-
-    def delete_recipe_draft(self, store_id: str, item_name: str):
-        self._col(store_id, "recipe_drafts").document(item_name).delete()
-
-    # ---- menu items deliberately excluded from recipes ----
-    # Service charges and the like never consume stock. Marking them keeps
-    # the "no recipe linked" warning meaningful: what's left flagged is
-    # genuinely forgotten, not a corkage fee. Without this the warning
-    # list fills with items that are fine, and then nobody reads it.
-
-    def skip_recipe(self, store_id: str, item_name: str):
-        self._col(store_id, "recipe_skips").document(item_name).set({"item_name": item_name})
-
-    def unskip_recipe(self, store_id: str, item_name: str):
-        self._col(store_id, "recipe_skips").document(item_name).delete()
-
-    def list_recipe_skips(self, store_id: str) -> list[str]:
-        return [d.id for d in self._col(store_id, "recipe_skips").stream()]
-
-    # ---- recipes (menu item -> ingredient quantities) ----
-    def get_recipe(self, store_id: str, item_name: str) -> list[dict]:
-        doc = self._col(store_id, "recipes").document(item_name).get()
-        return (doc.to_dict() or {}).get("ingredients", [])
-
-    def set_recipe(self, store_id: str, item_name: str, ingredients: list[dict]):
-        self._col(store_id, "recipes").document(item_name).set({"ingredients": ingredients})
-
-    # ---- expenses ----
-    def add_expense(self, store_id: str, category: str, name: str, amount: float, date: str):
-        self._col(store_id, "expenses").add({
-            "category": category, "name": name, "amount": amount, "date": date,
-        })
-
-    def list_expenses(self, store_id: str, category: str | None = None) -> list[dict]:
-        col = self._col(store_id, "expenses")
-        query = col.where("category", "==", category) if category else col
-        return [d.to_dict() | {"id": d.id} for d in query.stream()]
-
-    # ---- processed receipts (avoid double-deducting stock on re-sync) ----
-    def is_receipt_processed(self, store_id: str, receipt_number: str) -> bool:
-        return self._col(store_id, "processed_receipts").document(receipt_number).get().exists
-
-    def mark_receipt_processed(self, store_id: str, receipt_number: str):
-        self._col(store_id, "processed_receipts").document(receipt_number).set({"processed": True})
 
 
 def _adjust_note(new_stock: float, reason: str) -> str:

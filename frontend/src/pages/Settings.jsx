@@ -17,6 +17,8 @@ export default function Settings() {
   const [savingInterval, setSavingInterval] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
+  const [syncError, setSyncError] = useState('');
+  const [resettingCursor, setResettingCursor] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState(null);
 
@@ -96,9 +98,31 @@ export default function Settings() {
   async function runSync() {
     if (!storeId) return;
     setSyncing(true);
-    const res = await api.sync(storeId);
-    setSyncResult(res);
-    setSyncing(false);
+    setSyncError('');
+    try {
+      const res = await api.sync(storeId);
+      setSyncResult(res);
+    } catch (e) {
+      setSyncError(e.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function resetCursor() {
+    if (!storeId) return;
+    if (!window.confirm(
+      'รีเซ็ตจุดซิงก์เป็น "ตอนนี้"? บิลที่ขายไปก่อนหน้านี้ที่ยังไม่ถูกดึงเข้ามาจะถูกข้ามไปเลย ไม่ย้อนไปดึงย้อนหลัง')) return;
+    setResettingCursor(true);
+    setSyncError('');
+    try {
+      await api.resetSyncCursor(storeId);
+      setSyncResult(null);
+    } catch (e) {
+      setSyncError(e.message);
+    } finally {
+      setResettingCursor(false);
+    }
   }
 
   return (
@@ -226,15 +250,25 @@ export default function Settings() {
       <div className="card">
         <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>ซิงก์ตอนนี้</p>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          บังคับให้ซิงก์ทันทีโดยไม่ต้องรอรอบถัดไป
+          บังคับให้ซิงก์ทันทีโดยไม่ต้องรอรอบถัดไป - ดึงเฉพาะบิลใหม่ตั้งแต่ครั้งล่าสุดที่ซิงก์เท่านั้น
         </p>
-        <button onClick={runSync} disabled={syncing || !storeId}>
-          {syncing ? 'กำลังซิงก์...' : 'ซิงก์ตอนนี้'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={runSync} disabled={syncing || !storeId}>
+            {syncing ? 'กำลังซิงก์...' : 'ซิงก์ตอนนี้'}
+          </button>
+          <button onClick={resetCursor} disabled={resettingCursor || !storeId}
+            style={{ fontSize: 12 }}>
+            {resettingCursor ? 'กำลังรีเซ็ต...' : 'รีเซ็ตจุดซิงก์'}
+          </button>
+        </div>
         {syncResult && (
           <p style={{ fontSize: 12, color: 'var(--text-success)', marginTop: 8 }}>
             ประมวลผลบิลใหม่ {syncResult.processed_receipts} รายการ
+            {syncResult.processed_receipts === 0 && ' (ปกติสำหรับการซิงก์ครั้งแรกหลังเชื่อมสาขานี้ - รอบถัดไปจะเริ่มดึงบิลใหม่ตั้งแต่ตอนนี้เป็นต้นไป)'}
           </p>
+        )}
+        {syncError && (
+          <p style={{ fontSize: 12, color: 'var(--text-danger)', marginTop: 8 }}>{syncError}</p>
         )}
       </div>
     </div>

@@ -133,9 +133,6 @@ export const api = {
   suggestRecipe: (storeId, itemName) =>
     request(`/api/${storeId}/recipes/suggest?item_name=${encodeURIComponent(itemName)}`,
       { method: 'POST' }),
-  suggestAllRecipes: (storeId, itemNames) =>
-    request(`/api/${storeId}/recipes/suggest-all`,
-      { method: 'POST', body: JSON.stringify({ item_names: itemNames }) }),
   listRecipeDrafts: (storeId) => request(`/api/${storeId}/recipes/drafts`),
   deleteRecipeDraft: (storeId, itemName) =>
     request(`/api/${storeId}/recipes/drafts/${encodeURIComponent(itemName)}`, { method: 'DELETE' }),
@@ -144,12 +141,6 @@ export const api = {
     request(`/api/${storeId}/recipes/skips/${encodeURIComponent(itemName)}`, { method: 'POST' }),
   unskipRecipe: (storeId, itemName) =>
     request(`/api/${storeId}/recipes/skips/${encodeURIComponent(itemName)}`, { method: 'DELETE' }),
-
-  getRecipe: (storeId, itemName) => request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`),
-  setRecipe: (storeId, itemName, ingredients) =>
-    request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`, {
-      method: 'PUT', body: JSON.stringify(ingredients),
-    }),
 
   // ---- stock counts & variance (3.4) ----
   listCounts: (storeId) => request(`/api/${storeId}/counts`),
@@ -168,6 +159,12 @@ export const api = {
   saveVarianceSettings: (storeId, pct, value) =>
     request(`/api/${storeId}/variance-settings?pct=${pct}&value=${value}`, { method: 'POST' }),
 
+  getRecipe: (storeId, itemName) => request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`),
+  setRecipe: (storeId, itemName, ingredients) =>
+    request(`/api/${storeId}/recipes/${encodeURIComponent(itemName)}`, {
+      method: 'PUT', body: JSON.stringify(ingredients),
+    }),
+
   getExpenses: (storeId, category) =>
     request(`/api/${storeId}/expenses${category ? `?category=${category}` : ''}`),
   addExpense: (storeId, { category, name, amount, date }) =>
@@ -185,6 +182,7 @@ export const api = {
       body: JSON.stringify({ business_name: businessName, display_name: displayName }),
     }),
   peekInvite: (token) => request(`/api/invites/${encodeURIComponent(token)}`),
+  signupStatus: () => request('/api/signup/status'),
   signupJoin: (token, displayName) =>
     request('/api/signup/join', {
       method: 'POST',
@@ -204,4 +202,8 @@ export const api = {
     request(`/api/settings/sync-interval?seconds=${seconds}`, { method: 'POST' }),
 
   sync: (storeId) => request(`/api/${storeId}/sync`, { method: 'POST' }),
+  resetSyncCursor: (storeId) =>
+    request(`/api/${storeId}/sync/reset-cursor`, { method: 'POST' }),
+  resetSyncCursor: (storeId) =>
+    request(`/api/${storeId}/sync/reset-cursor`, { method: 'POST' }),
 };

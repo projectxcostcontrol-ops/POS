@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from adapters.loyverse_adapter import LoyverseAdapter
 from storage.firestore_store import Store
 from storage.movement_ledger import MovementLedger
-from core.stock_engine import sync_and_deduct
+from core.stock_engine import sync_and_deduct, sync_branch
 from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
@@ -32,6 +32,11 @@ from core.auth import can, CAPABILITIES, OWNER, ROLES
 from api.deps import make_auth_dependencies
 
 load_dotenv()
+
+# Closed beta: cap how many businesses can sign up. A join-by-invite never
+# creates a new tenant, so invited staff are never blocked by this - only
+# the "create a new business" door has a queue.
+MAX_TENANTS = int(os.environ.get("MAX_TENANTS", "10"))
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -166,7 +171,7 @@ async def auto_sync_loop():
                 if provider is None:
                     continue
                 for s in provider.get_stores():
-                    sync_and_deduct(provider, scoped, s["id"])
+                    sync_branch(provider, scoped, s["id"])
             except Exception as e:
                 print(f"[auto_sync] tenant {tenant.get('id')} error: {e}")
         await asyncio.sleep(max(30, shortest))
@@ -181,12 +186,25 @@ async def startup():
 # Two doors in, and no others. Either you start a business (and own it), or
 # someone who already owns one invited you.
 
+@app.get("/api/signup/status")
+def signup_status(claims: dict = Depends(current_claims)):
+    """Lets the signup screen show remaining slots (or a full state) before
+    someone fills in a business name, rather than only failing on submit."""
+    used = len(root_store.list_tenants())
+    return {"open": used < MAX_TENANTS, "slots_left": max(0, MAX_TENANTS - used), "cap": MAX_TENANTS}
+
+
 @app.post("/api/signup/business")
 def signup_business(data: dict, claims: dict = Depends(current_claims)):
     """data: {business_name, display_name}"""
     existing = root_store.get_user(claims["uid"])
     if existing:
         raise HTTPException(400, "บัญชีนี้อยู่ในธุรกิจอื่นอยู่แล้ว")
+
+    if len(root_store.list_tenants()) >= MAX_TENANTS:
+        raise HTTPException(
+            403, f"ตอนนี้เปิดทดลองใช้งานครบ {MAX_TENANTS} ร้านแล้วสำหรับช่วง Close Beta "
+                 f"ขอบคุณที่สนใจ Rankrua เร็ว ๆ นี้จะเปิดรับเพิ่มครับ")
 
     name = (data.get("business_name") or "").strip()
     if not name:
@@ -618,6 +636,12 @@ def remove_alias(store_id: str, material_id: str, alias: str, c: Ctx = Depends(s
 # much, because that depends on how this kitchen portions and a guessed
 # number is indistinguishable from a measured one once saved. The one
 # exception is resale goods, where selling one bottle consumes one bottle.
+#
+# Bulk drafting (many menus in one Gemini call) was tried and removed for
+# the closed beta - a single request covering dozens of menus is exactly
+# the shape that can exceed the model's output token budget. Per-menu
+# suggestion asks for one dish at a time, which is a small, predictable
+# request regardless of how many menus the business has.
 
 def _suggest_for(c: Ctx, store_id: str, menu_names: list[str]) -> list[dict]:
     """Runs the suggestion and attaches, for each proposed ingredient,
@@ -647,30 +671,6 @@ def suggest_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
     return result[0] if result else {"menu": item_name, "kind": "cooked", "ingredients": []}
 
 
-@app.post("/api/{store_id}/recipes/suggest-all")
-def suggest_all_recipes(store_id: str, data: dict, c: Ctx = Depends(store_ctx)):
-    """data: {item_names: [...]}. Drafts many at once and SAVES them, because
-    a batch is worked through over time rather than in one sitting. Saved
-    drafts change nothing on their own - each still has to be opened,
-    given quantities, and confirmed."""
-    names = [n for n in (data.get("item_names") or []) if n]
-    if not names:
-        raise HTTPException(400, "ไม่มีเมนูให้ร่าง")
-    if len(names) > 60:
-        # One request per menu costs tokens and time; past this it's better
-        # to do it in rounds than to sit on a request that may time out.
-        raise HTTPException(400, "ร่างได้ครั้งละไม่เกิน 60 เมนู - แบ่งเป็นหลายรอบ")
-
-    try:
-        suggestions = _suggest_for(c, store_id, names)
-    except VisionError as e:
-        raise HTTPException(502, str(e))
-
-    for entry in suggestions:
-        c.store.set_recipe_draft(store_id, entry["menu"], entry["kind"], entry["ingredients"])
-    return {"drafted": len(suggestions), "menus": suggestions}
-
-
 @app.get("/api/{store_id}/recipes/drafts")
 def list_recipe_drafts(store_id: str, c: Ctx = Depends(store_ctx)):
     return c.store.list_recipe_drafts(store_id)
@@ -698,23 +698,6 @@ def skip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
 @app.delete("/api/{store_id}/recipes/skips/{item_name}")
 def unskip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
     c.store.unskip_recipe(store_id, item_name)
-    return {"ok": True}
-
-
-# ---- recipes -----------------------------------------------------------
-
-@app.get("/api/{store_id}/recipes/{item_name}")
-def get_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
-    return c.store.get_recipe(store_id, item_name)
-
-
-@app.put("/api/{store_id}/recipes/{item_name}")
-def set_recipe(store_id: str, item_name: str, ingredients: list[dict],
-               c: Ctx = Depends(store_ctx)):
-    c.store.set_recipe(store_id, item_name, ingredients)
-    # A confirmed recipe supersedes its draft - leaving the draft around
-    # would offer the same suggestion again over a recipe that's now real.
-    c.store.delete_recipe_draft(store_id, item_name)
     return {"ok": True}
 
 
@@ -866,6 +849,23 @@ def set_variance_settings(store_id: str, pct: float, value: float,
     return {"pct": pct, "value": value}
 
 
+# ---- recipes -----------------------------------------------------------
+
+@app.get("/api/{store_id}/recipes/{item_name}")
+def get_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
+    return c.store.get_recipe(store_id, item_name)
+
+
+@app.put("/api/{store_id}/recipes/{item_name}")
+def set_recipe(store_id: str, item_name: str, ingredients: list[dict],
+               c: Ctx = Depends(store_ctx)):
+    c.store.set_recipe(store_id, item_name, ingredients)
+    # A confirmed recipe supersedes its draft - leaving the draft around
+    # would offer the same suggestion again over a recipe that's now real.
+    c.store.delete_recipe_draft(store_id, item_name)
+    return {"ok": True}
+
+
 # ---- expenses / receipts ----------------------------------------------
 
 @app.get("/api/{store_id}/expenses")
@@ -889,8 +889,24 @@ def list_receipts(store_id: str, created_at_min: str | None = None,
 
 @app.post("/api/{store_id}/sync")
 def sync(store_id: str, c: Ctx = Depends(store_ctx)):
-    count = sync_and_deduct(c.provider, c.store, store_id)
+    """Uses the saved cursor like the background loop does - see
+    Store.get_sync_cursor. The first press for a newly connected branch
+    establishes the cursor and reports 0 processed; that's correct, not
+    broken - press again (or just wait for the next auto sync) to pull
+    whatever's sold since."""
+    count = sync_branch(c.provider, c.store, store_id)
     return {"processed_receipts": count}
+
+
+@app.post("/api/{store_id}/sync/reset-cursor")
+def reset_sync_cursor(store_id: str, c: Ctx = Depends(store_settings)):
+    """Escape hatch for a branch whose cursor is stuck or wrong (e.g. it
+    was accidentally set far in the past and the next sync would try to
+    pull months of history again). Re-establishes the cursor at "now",
+    the same as a brand new connection - it does NOT back-fill anything
+    skipped in between."""
+    c.store.set_sync_cursor(store_id, _now())
+    return {"ok": True}
 
 
 # ---- user management ---------------------------------------------------

@@ -22,7 +22,6 @@ export default function Recipes() {
   const [editingItem, setEditingItem] = useState(null);
   const [rows, setRows] = useState([]);
   const [suggesting, setSuggesting] = useState(null);
-  const [bulkRunning, setBulkRunning] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -55,9 +54,6 @@ export default function Recipes() {
   function recipeCost(recipe) {
     return recipe.reduce((sum, r) => sum + (Number(r.qty) || 0) * materialCost(r.material_id), 0);
   }
-
-  const needsRecipe = items.filter(
-    (it) => !(recipeMap[it.name] || []).length && !skips.includes(it.name));
 
   function openRecipe(item) {
     setRows((recipeMap[item.name] || []).map((r) => ({ ...r })));
@@ -97,21 +93,6 @@ export default function Recipes() {
       setError(e.message);
     } finally {
       setSuggesting(null);
-    }
-  }
-
-  async function suggestAll() {
-    const names = needsRecipe.map((it) => it.name).slice(0, 60);
-    if (!names.length) return;
-    setBulkRunning(true);
-    setError('');
-    try {
-      await api.suggestAllRecipes(storeId, names);
-      refreshDrafts();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBulkRunning(false);
     }
   }
 
@@ -166,19 +147,10 @@ export default function Recipes() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-        <div>
-          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>สูตรอาหาร</p>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-            ผูกสูตรอาหารกับเมนู ระบบจะตัดสต๊อกอัตโนมัติทุกครั้งที่ขาย และคำนวณต้นทุนต่อเมนูให้
-          </p>
-        </div>
-        {aiAvailable && needsRecipe.length > 0 && (
-          <button onClick={suggestAll} disabled={bulkRunning} style={{ whiteSpace: 'nowrap' }}>
-            {bulkRunning ? 'กำลังร่าง...' : `🪄 ร่างสูตรที่ยังว่าง (${needsRecipe.length})`}
-          </button>
-        )}
-      </div>
+      <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>สูตรอาหาร</p>
+      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
+        ผูกสูตรอาหารกับเมนู ระบบจะตัดสต๊อกอัตโนมัติทุกครั้งที่ขาย และคำนวณต้นทุนต่อเมนูให้
+      </p>
 
       {error && <p style={{ fontSize: 12, color: 'var(--text-danger)', marginBottom: 12 }}>{error}</p>}
 

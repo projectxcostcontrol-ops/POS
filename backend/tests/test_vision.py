@@ -174,9 +174,6 @@ def test_chain_all_fail():
 
 def test_truncated_reply_is_salvaged_but_flagged():
     section("A reply cut off mid-write keeps what was complete, and says so")
-    # A long grocery invoice can exhaust the output budget partway through
-    # the item list. Everything already written is good data - throwing the
-    # whole scan away over a missing brace wastes a correct reading.
     truncated = ('{"supplier": "ซีพี แอ็กซ์ตร้า", "invoice": "0337", "date": "2026-07-01",'
                  ' "items": [{"name": "น้ำมันพืช", "qty": 12, "unit": "ขวด", "price": 45},'
                  ' {"name": "น้ำตาลทร')
@@ -190,9 +187,6 @@ def test_truncated_reply_is_salvaged_but_flagged():
 
 def test_salvage_only_when_the_model_ran_out_of_room():
     section("Broken JSON is NOT repaired on a guess - only when Gemini said it stopped early")
-    # Repairing anything that fails to parse would risk turning a genuinely
-    # garbled answer into data that looks confident. Salvage is gated on
-    # Gemini reporting MAX_TOKENS.
     broken = '{"supplier": "ก", "items": [{"name": "ของ'
     try:
         _parse_json(broken, allow_salvage=False)

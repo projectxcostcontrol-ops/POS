@@ -150,6 +150,21 @@ def summarise(rows: list[dict]) -> dict:
     }
 
 
+def unmeasured_menus(sold_item_names: set[str], recipes: dict,
+                     skipped: list[str]) -> list[str]:
+    """Menus that sold during the period but have no recipe.
+
+    Their ingredients left the kitchen with nothing recording it, so those
+    ingredients surface as unexplained losses. Naming them is the
+    difference between a report that's incomplete and one that's
+    misleading - the numbers look equally confident either way."""
+    skip_set = set(skipped)
+    return sorted(
+        name for name in sold_item_names
+        if name not in skip_set and not (recipes.get(name) or [])
+    )
+
+
 def count_offcycle_adjustments(movements: list[dict], start: str | None,
                                end: str | None, session_id: str) -> int:
     """Corrections made from the materials page between the two counts.
@@ -172,18 +187,3 @@ def count_offcycle_adjustments(movements: list[dict], start: str | None,
             continue
         count += 1
     return count
-
-
-def unmeasured_menus(sold_item_names: set[str], recipes: dict,
-                     skipped: list[str]) -> list[str]:
-    """Menus that sold during the period but have no recipe.
-
-    Their ingredients left the kitchen with nothing recording it, so those
-    ingredients surface as unexplained losses. Naming them is the
-    difference between a report that's incomplete and one that's
-    misleading - the numbers look equally confident either way."""
-    skip_set = set(skipped)
-    return sorted(
-        name for name in sold_item_names
-        if name not in skip_set and not (recipes.get(name) or [])
-    )

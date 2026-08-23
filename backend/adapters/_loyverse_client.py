@@ -13,6 +13,20 @@ import requests
 
 BASE_URL = "https://api.loyverse.com/v1.0"
 
+# Without an explicit timeout, requests will wait forever on a connection
+# that stalls - not slow, literally unbounded. That's indistinguishable
+# from a frozen UI to whoever is looking at a spinner that never resolves,
+# and it was the actual cause of a real sync hanging on its very first
+# call, before any data volume could even be a factor. (connect, read)
+DEFAULT_TIMEOUT = (10, 30)
+
+# A cursor that never goes empty - a malformed response, an API change we
+# haven't seen - would otherwise loop forever. This is deliberately far
+# above anything a real sync should ever need (250k+ records) so it never
+# fires in normal use; it exists purely so a broken response fails loudly
+# instead of hanging just as silently as the missing timeout did.
+MAX_PAGES = 1000
+
 
 class LoyverseClient:
     def __init__(self, access_token: str | None = None):
@@ -27,11 +41,11 @@ class LoyverseClient:
 
     def _get(self, path: str, params: dict | None = None) -> dict:
         url = f"{BASE_URL}{path}"
-        resp = self.session.get(url, params=params or {})
+        resp = self.session.get(url, params=params or {}, timeout=DEFAULT_TIMEOUT)
         if resp.status_code == 429:
             # rate limited -> back off and retry once
             time.sleep(2)
-            resp = self.session.get(url, params=params or {})
+            resp = self.session.get(url, params=params or {}, timeout=DEFAULT_TIMEOUT)
         if not resp.ok:
             print(f"Loyverse API error {resp.status_code} on GET {path}: {resp.text}")
         resp.raise_for_status()
@@ -39,25 +53,29 @@ class LoyverseClient:
 
     def _post(self, path: str, payload: dict) -> dict:
         url = f"{BASE_URL}{path}"
-        resp = self.session.post(url, json=payload)
+        resp = self.session.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
         if not resp.ok:
             print(f"Loyverse API error {resp.status_code} on POST {path}: {resp.text}")
         resp.raise_for_status()
         return resp.json()
 
     def _paginate(self, path: str, key: str, params: dict | None = None) -> list[dict]:
-        """Loop through cursor-based pagination until all records are collected."""
+        """Loop through cursor-based pagination until all records are
+        collected, or until MAX_PAGES is hit - see its comment above."""
         params = dict(params or {})
         params.setdefault("limit", 250)
         results = []
-        while True:
+        for _ in range(MAX_PAGES):
             data = self._get(path, params)
             results.extend(data.get(key, []))
             cursor = data.get("cursor")
             if not cursor:
-                break
+                return results
             params["cursor"] = cursor
-        return results
+        raise RuntimeError(
+            f"เรียก {path} เกิน {MAX_PAGES} หน้าโดยยังไม่จบ - "
+            f"Loyverse อาจตอบกลับผิดปกติ (cursor ไม่มีวันหมด)"
+        )
 
     # ---------- read endpoints ----------
 

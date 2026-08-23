@@ -51,9 +51,6 @@ def session(sid, closed_at, entries):
 
 def test_shortfall_is_measured_against_usage_not_stock():
     section("A shortfall is a percentage of what was USED, not of what's on the shelf")
-    # 1kg missing from 8kg used is a real problem; 1kg from a 50kg sack
-    # that barely moved is probably a measuring difference. Measuring
-    # against stock on hand would rank those the wrong way round.
     store, ledger, sid = build()
     ledger.record(sid, "m1", "receive", 10, unit_cost=100, occurred_at="2026-07-01T00:00:00")
     ledger.record(sid, "m1", "sale", -8, occurred_at="2026-07-05T00:00:00")
@@ -72,9 +69,6 @@ def test_shortfall_is_measured_against_usage_not_stock():
 
 def test_both_thresholds_must_be_crossed():
     section("Flagging needs BOTH a big percentage and real money")
-    # Percentage alone flags 40 baht of pepper every week; value alone
-    # flags any expensive item whose count was rounded. A warning list
-    # nobody reads protects nothing.
     check("big % but trivial value -> not flagged",
           _is_flagged(-3, 2, 30.0, 10.0, 200.0), False)
     check("big value but small % -> not flagged",
@@ -85,8 +79,6 @@ def test_both_thresholds_must_be_crossed():
 
 def test_surplus_is_reported_but_never_flagged():
     section("Finding MORE than expected is shown, not alarmed about")
-    # A surplus usually means the recipe overstates the dish - something
-    # to correct, not a loss to chase.
     store, ledger, sid = build()
     ledger.record(sid, "m1", "sale", -5, occurred_at="2026-07-05T00:00:00")
     ledger.record(sid, "m1", "count", 0.9, occurred_at="2026-07-08T00:00:00", ref="s2")
@@ -102,8 +94,6 @@ def test_surplus_is_reported_but_never_flagged():
 
 def test_no_usage_means_no_percentage_and_no_flag():
     section("A material nothing was made from can't have a meaningful variance")
-    # Dividing by zero usage would either crash or invent a number. Neither
-    # is worth it: with no consumption there's nothing to compare against.
     store, ledger, sid = build()
     ledger.record(sid, "m1", "count", -5, occurred_at="2026-07-08T00:00:00", ref="s2")
 
@@ -119,9 +109,9 @@ def test_no_usage_means_no_percentage_and_no_flag():
 def test_only_movements_inside_the_period_count():
     section("Usage before the previous count belongs to the previous period")
     store, ledger, sid = build()
-    ledger.record(sid, "m1", "sale", -100, occurred_at="2026-06-01T00:00:00")  # last period
-    ledger.record(sid, "m1", "sale", -4, occurred_at="2026-07-05T00:00:00")    # this one
-    ledger.record(sid, "m1", "sale", -50, occurred_at="2026-07-20T00:00:00")   # after the count
+    ledger.record(sid, "m1", "sale", -100, occurred_at="2026-06-01T00:00:00")
+    ledger.record(sid, "m1", "sale", -4, occurred_at="2026-07-05T00:00:00")
+    ledger.record(sid, "m1", "sale", -50, occurred_at="2026-07-20T00:00:00")
     ledger.record(sid, "m1", "count", -1, occurred_at="2026-07-08T00:00:00", ref="s2")
 
     rows = analyse_session(ledger, sid, session("s2", "2026-07-08T00:00:00", {"m1": 2}),
@@ -133,9 +123,6 @@ def test_only_movements_inside_the_period_count():
 
 def test_waste_is_shown_separately_not_netted_off():
     section("Recorded waste is reported beside the variance, not folded into it")
-    # Waste already left the ledger, so it isn't part of the unexplained
-    # gap. Showing it separately answers "was any of this accounted for?"
-    # without quietly shrinking the number.
     store, ledger, sid = build()
     ledger.record(sid, "m1", "sale", -6, occurred_at="2026-07-05T00:00:00")
     ledger.record(sid, "m1", "waste", -0.5, occurred_at="2026-07-06T00:00:00")
@@ -151,9 +138,6 @@ def test_waste_is_shown_separately_not_netted_off():
 
 def test_a_counts_correction_is_matched_by_session():
     section("Each report reads its OWN count, not whatever happened that day")
-    # An unrelated adjustment on the same day must not be mistaken for
-    # this count's correction, or one session's number lands in another's
-    # report.
     store, ledger, sid = build()
     ledger.record(sid, "m1", "sale", -5, occurred_at="2026-07-05T00:00:00")
     ledger.record(sid, "m1", "count", -9, occurred_at="2026-07-08T01:00:00", ref="other")
@@ -192,9 +176,6 @@ def test_materials_deleted_since_the_count_are_skipped():
 
 def test_unmeasured_menus_are_named():
     section("Menus sold without a recipe are named, not silently ignored")
-    # Their ingredients left the kitchen with nothing recording it, so they
-    # surface as unexplained loss. A report that doesn't say so looks just
-    # as confident as one that's complete.
     sold = {"ข้าวผัดกุ้ง", "ต้มยำ", "ค่าเปิดขวด", "ผัดไท"}
     recipes = {"ข้าวผัดกุ้ง": [{"material_id": "m1", "qty": 1}], "ต้มยำ": [], "ผัดไท": []}
 
@@ -206,18 +187,14 @@ def test_unmeasured_menus_are_named():
 
 def test_offcycle_adjustments_are_counted():
     section("Corrections made between counts are counted and reported")
-    # Each one absorbs part of the discrepancy before the count can see it,
-    # so the shortfall figure becomes a floor rather than a measurement.
-    # The report can't recover the lost amount - it can only refuse to
-    # present an understated number as if it were complete.
     movements = [
-        {"kind": "count", "ref": None, "occurred_at": "2026-06-15T00:00:00"},   # last period
-        {"kind": "count", "ref": None, "occurred_at": "2026-07-03T00:00:00"},   # in window
-        {"kind": "count", "ref": None, "occurred_at": "2026-07-05T00:00:00"},   # in window
-        {"kind": "count", "ref": "s2", "occurred_at": "2026-07-08T00:00:00"},   # this count
-        {"kind": "count", "ref": "s3", "occurred_at": "2026-07-06T00:00:00"},   # another session
-        {"kind": "sale", "ref": None, "occurred_at": "2026-07-04T00:00:00"},    # not an adjustment
-        {"kind": "count", "ref": None, "occurred_at": "2026-07-20T00:00:00"},   # after the count
+        {"kind": "count", "ref": None, "occurred_at": "2026-06-15T00:00:00"},
+        {"kind": "count", "ref": None, "occurred_at": "2026-07-03T00:00:00"},
+        {"kind": "count", "ref": None, "occurred_at": "2026-07-05T00:00:00"},
+        {"kind": "count", "ref": "s2", "occurred_at": "2026-07-08T00:00:00"},
+        {"kind": "count", "ref": "s3", "occurred_at": "2026-07-06T00:00:00"},
+        {"kind": "sale", "ref": None, "occurred_at": "2026-07-04T00:00:00"},
+        {"kind": "count", "ref": None, "occurred_at": "2026-07-20T00:00:00"},
     ]
     check("only the untagged ones inside the window",
           count_offcycle_adjustments(movements, "2026-07-01T00:00:00", "2026-07-08T00:00:00", "s2"), 2)
@@ -227,8 +204,6 @@ def test_offcycle_adjustments_are_counted():
 
 def test_adjustment_note_records_the_reason():
     section("Why a number was changed is stored with it")
-    # Three months later the history is all anyone has; "แก้ไขจำนวนเป็น 4"
-    # with no reason is a dead end.
     from storage.firestore_store import _adjust_note
     check("reason included", _adjust_note(4.5, "กรอกผิด"), "แก้ไขจำนวนเป็น 4.5 (กรอกผิด)")
     check("no reason given still reads sensibly", _adjust_note(4.5, ""), "แก้ไขจำนวนเป็น 4.5")
@@ -251,8 +226,6 @@ def test_summary_totals():
 
 def test_count_sessions_stay_out_of_the_ledger_until_closed():
     section("An open count writes nothing - a half-done count is worse than none")
-    # If a partial count committed, every material nobody had reached yet
-    # would read as "counted and correct".
     store = make_test_store()
     ledger = MovementLedger(store)
     s = store.create_count_session("branch1", "2026-07-24T09:00:00")
