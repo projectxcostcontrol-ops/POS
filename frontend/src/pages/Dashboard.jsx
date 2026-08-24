@@ -1,174 +1,395 @@
 import { useEffect, useState } from 'react';
+import { NavLink } from 'react-router-dom';
 import { useStore } from '../store/StoreContext';
+import { useAuth } from '../auth/AuthContext';
 import { api } from '../api/client';
-import BarChart from '../components/BarChart';
+import SalesChart from '../components/SalesChart';
+
+const PERIODS = [
+  { id: 'day', label: 'วันนี้' },
+  { id: 'week', label: 'สัปดาห์นี้' },
+  { id: 'month', label: 'เดือนนี้' },
+];
+
+function windowFor(period, custom) {
+  const now = new Date();
+  if (period === 'custom' && custom.from && custom.to) {
+    const to = new Date(custom.to);
+    to.setHours(23, 59, 59, 999);
+    return { from: new Date(custom.from).toISOString(), to: to.toISOString() };
+  }
+  const start = new Date(now);
+  if (period === 'day') start.setHours(0, 0, 0, 0);
+  else if (period === 'week') { start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0); }
+  else { start.setDate(1); start.setHours(0, 0, 0, 0); }
+  return { from: start.toISOString(), to: now.toISOString() };
+}
+
+const baht = (n) => '฿' + Math.round(n).toLocaleString('en-US');
 
 export default function Dashboard() {
   const { storeId } = useStore();
-  const [receipts, setReceipts] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [recipes, setRecipes] = useState({}); // { itemName: [{material_id, qty}] }
-  const [period, setPeriod] = useState('today');
-  const [loading, setLoading] = useState(true);
+  const { can, profile } = useAuth();
+  const showMoney = can('view_money');
 
+  const [alerts, setAlerts] = useState(null);
+  const [period, setPeriod] = useState('day');
+  const [custom, setCustom] = useState({ from: '', to: '' });
+  const [summary, setSummary] = useState(null);
+  const [top, setTop] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [salesError, setSalesError] = useState('');
+
+  // Alerts load independently of the sales figures. If the sales endpoints
+  // fail, staff should still see that stock is running out - the two
+  // aren't related and shouldn't fail together.
   useEffect(() => {
     if (!storeId) return;
-    setLoading(true);
-    Promise.all([api.getReceipts(storeId), api.getMaterials(storeId)]).then(async ([rec, mats]) => {
-      setReceipts(rec);
-      setMaterials(mats);
-      const names = new Set();
-      rec.forEach((r) => r.line_items.forEach((li) => names.add(li.item_name)));
-      const pairs = await Promise.all(
-        [...names].map((n) => api.getRecipe(storeId, n).then((r) => [n, r]))
-      );
-      setRecipes(Object.fromEntries(pairs));
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    api.getAlerts(storeId).then(setAlerts).catch(() => setAlerts(null));
   }, [storeId]);
 
+  useEffect(() => {
+    if (!storeId || !showMoney) return;
+    if (period === 'custom' && !(custom.from && custom.to)) return;
+
+    const { from, to } = windowFor(period, custom);
+    const granularity = period === 'day' ? 'hour' : 'day';
+    setLoading(true);
+    setSalesError('');
+
+    Promise.all([
+      api.getSalesSummary(storeId, from, to, granularity),
+      api.getTopItems(storeId, from, to, 5),
+    ])
+      .then(([s, t]) => { setSummary(s); setTop(t); })
+      .catch((e) => { setSummary(null); setSalesError(e.message); })
+      .finally(() => setLoading(false));
+  }, [storeId, period, custom, showMoney]);
+
   if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
-  if (loading) return <p>กำลังโหลด...</p>;
-
-  const now = new Date();
-  const inPeriod = (d) => {
-    if (period === 'today') return d.toDateString() === now.toDateString();
-    if (period === 'week') {
-      const weekAgo = new Date(now); weekAgo.setDate(now.getDate() - 7);
-      return d >= weekAgo;
-    }
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  };
-  const filtered = receipts.filter((r) => inPeriod(new Date(r.created_at)));
-
-  const totalSales = filtered.reduce((s, r) => s + (r.total || 0), 0);
-  const billCount = filtered.length;
-
-  const itemTotals = {};
-  filtered.forEach((r) => r.line_items.forEach((li) => {
-    const key = li.item_name || 'ไม่ระบุ';
-    itemTotals[key] = itemTotals[key] || { qty: 0, revenue: 0 };
-    itemTotals[key].qty += li.quantity || 0;
-    itemTotals[key].revenue += (li.price || 0) * (li.quantity || 0);
-  }));
-  const topItems = Object.entries(itemTotals).sort((a, b) => b[1].revenue - a[1].revenue).slice(0, 5);
-  const missingRecipeItems = Object.keys(itemTotals).filter((name) => (recipes[name] || []).length === 0);
-
-  const materialCost = filtered.reduce((sum, r) => {
-    r.line_items.forEach((li) => {
-      (recipes[li.item_name] || []).forEach((ing) => {
-        const mat = materials.find((m) => m.id === ing.material_id);
-        if (mat) sum += (mat.cost || 0) * ing.qty * (li.quantity || 0);
-      });
-    });
-    return sum;
-  }, 0);
-  const grossProfit = totalSales - materialCost;
-  const lowStockCount = materials.filter((m) => (m.stock || 0) <= (m.par || 0)).length;
-
-  let chartLabels = [];
-  let chartValues = [];
-  if (period === 'today') {
-    const buckets = Array(12).fill(0);
-    filtered.forEach((r) => {
-      const h = new Date(r.created_at).getHours();
-      buckets[Math.floor(h / 2)] += r.total || 0;
-    });
-    chartLabels = buckets.map((_, i) => `${i * 2}-${i * 2 + 2}`);
-    chartValues = buckets;
-  } else {
-    const days = period === 'week' ? 7 : now.getDate();
-    const buckets = Array(days).fill(0);
-    const start = new Date(now);
-    if (period === 'week') start.setDate(now.getDate() - (days - 1));
-    else start.setDate(1);
-    filtered.forEach((r) => {
-      const d = new Date(r.created_at);
-      const idx = Math.floor((d - start) / (1000 * 60 * 60 * 24));
-      if (idx >= 0 && idx < days) buckets[idx] += r.total || 0;
-    });
-    chartLabels = buckets.map((_, i) => {
-      const d = new Date(start); d.setDate(start.getDate() + i);
-      return String(d.getDate());
-    });
-    chartValues = buckets;
-  }
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>ภาพรวมยอดขาย</p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {['today', 'week', 'month'].map((p) => (
-            <button key={p} onClick={() => setPeriod(p)}
-              style={{ background: period === p ? 'var(--surface-1)' : undefined }}>
-              {p === 'today' ? 'วันนี้' : p === 'week' ? 'สัปดาห์นี้' : 'เดือนนี้'}
-            </button>
-          ))}
-        </div>
-      </div>
+      <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 2px' }}>
+        {profile.business_name || 'หน้าแรก'}
+      </p>
+      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 18px' }}>
+        {new Date().toLocaleDateString('th-TH',
+          { weekday: 'long', day: 'numeric', month: 'long' })}
+      </p>
 
-      {missingRecipeItems.length > 0 && (
-        <div style={{
-          background: '#fdf3e3', border: '1px solid var(--text-warning)', borderRadius: 8,
-          padding: '10px 14px', marginBottom: 16, fontSize: 13, color: 'var(--text-warning)',
-        }}>
-          ⚠ เมนูที่ขายในช่วงนี้ยังไม่ได้ผูกสูตร: {missingRecipeItems.join(', ')} — ต้นทุนและกำไรที่คำนวณไว้ยังไม่นับรวมเมนูนี้
-          (ไปผูกสูตรได้ที่หน้า "สูตรอาหาร")
-        </div>
+      <Alerts alerts={alerts} />
+
+      {showMoney ? (
+        <>
+          <p style={{
+            fontSize: 11, fontWeight: 600, letterSpacing: .6, color: 'var(--text-muted)',
+            textTransform: 'uppercase', margin: '24px 2px 9px',
+          }}>ยอดขาย</p>
+
+          <PeriodPicker period={period} setPeriod={setPeriod}
+            custom={custom} setCustom={setCustom} />
+
+          {loading && <p style={{ fontSize: 13 }}>กำลังโหลด...</p>}
+          {salesError && (
+            <p style={{ fontSize: 12, color: 'var(--text-danger)' }}>{salesError}</p>
+          )}
+
+          {summary && !loading && (
+            <>
+              <SummaryCard summary={summary} period={period} />
+              <TopItems items={top} />
+            </>
+          )}
+        </>
+      ) : (
+        <StaffShortcuts />
       )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 24 }}>
-        <Stat label="ยอดขาย" value={`฿${totalSales.toLocaleString()}`} />
-        <Stat label="จำนวนบิล" value={billCount} />
-        <Stat label="กำไรขั้นต้น" value={`฿${Math.round(grossProfit).toLocaleString()}`} color="var(--text-success)" />
-        <Stat label="สต๊อกใกล้หมด" value={lowStockCount} color={lowStockCount > 0 ? 'var(--text-warning)' : undefined} />
-      </div>
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>ยอดขายรวม</p>
-        <BarChart labels={chartLabels} values={chartValues} />
-      </div>
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>ยอดขายแยกรายการ</p>
-        {topItems.length === 0 && <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>ยังไม่มียอดขายในช่วงนี้</p>}
-        {topItems.map(([name, t], idx) => (
-          <div key={name} style={{
-            display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: 13,
-            borderBottom: idx < topItems.length - 1 ? '0.5px solid var(--border)' : 'none',
-          }}>
-            <span>{name}{(recipes[name] || []).length === 0 && <span style={{ color: 'var(--text-warning)' }}> ⚠</span>}</span>
-            <span style={{ color: 'var(--text-secondary)' }}>x{t.qty}</span>
-            <span>฿{t.revenue.toLocaleString()}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="card">
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>บิลล่าสุด</p>
-        {filtered.slice(0, 5).map((r, idx) => (
-          <div key={r.receipt_number} style={{
-            display: 'flex', justifyContent: 'space-between', padding: '8px 0', fontSize: 13,
-            borderBottom: idx < 4 ? '0.5px solid var(--border)' : 'none',
-          }}>
-            <span>#{r.receipt_number}</span>
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {r.line_items.map((li) => li.item_name).join(', ')}
-            </span>
-            <span>฿{(r.total || 0).toLocaleString()}</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
 
-function Stat({ label, value, color }) {
+function Alerts({ alerts }) {
+  if (!alerts) return null;
+
+  const rows = [];
+  if (alerts.negative_stock?.length) {
+    rows.push({
+      to: '/materials', emoji: '❗', level: 'danger',
+      title: `สต๊อกติดลบ ${alerts.negative_stock.length} อย่าง`,
+      sub: alerts.negative_stock.slice(0, 3).map((m) => m.name).join(' · ') +
+        ' — ตรวจสอบว่าลืมบันทึกของที่รับเข้ามาหรือไม่',
+    });
+  }
+  if (alerts.low_stock?.length) {
+    rows.push({
+      to: '/materials', emoji: '🥬', level: 'danger',
+      title: `ของใกล้หมด ${alerts.low_stock.length} อย่าง`,
+      sub: alerts.low_stock.slice(0, 3).map((m) => m.name).join(' · '),
+    });
+  }
+  if (alerts.pending_drafts > 0) {
+    rows.push({
+      to: '/receiving', emoji: '📄', level: 'warn',
+      title: `ใบส่งของรอตรวจ ${alerts.pending_drafts} ใบ`,
+      sub: 'รอดำเนินการ เพื่อปรับสต๊อก',
+    });
+  }
+  if (alerts.count_due) {
+    rows.push({
+      to: '/stock-count', emoji: '📋', level: 'warn',
+      title: 'ถึงรอบตรวจนับสต๊อก',
+      // "never counted" and "counted a while ago" are different situations:
+      // one is a setup step nobody has done, the other a habit that slipped.
+      sub: alerts.days_since_count === null
+        ? 'ยังไม่เคยนับ — นับครั้งแรกเพื่อเริ่มเทียบของหาย'
+        : `นับครั้งล่าสุด ${alerts.days_since_count} วันที่แล้ว`,
+    });
+  }
+
   return (
-    <div className="stat-card">
-      <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 6px' }}>{label}</p>
-      <p style={{ fontSize: 24, fontWeight: 500, margin: 0, color }}>{value}</p>
+    <div>
+      <p style={{
+        fontSize: 11, fontWeight: 600, letterSpacing: .6, color: 'var(--text-muted)',
+        textTransform: 'uppercase', margin: '0 2px 9px',
+      }}>แจ้งเตือน</p>
+
+      {rows.length === 0 ? (
+        <div style={{
+          background: 'var(--surface-1)', border: '1px dashed var(--border)',
+          borderRadius: 10, padding: 16, textAlign: 'center',
+          fontSize: 13, color: 'var(--text-success)',
+        }}>
+          วันนี้เรียบร้อยดี ✓
+        </div>
+      ) : rows.map((r, i) => (
+        <NavLink key={i} to={r.to} style={{
+          display: 'flex', alignItems: 'center', gap: 11, textDecoration: 'none',
+          color: 'inherit', background: 'var(--surface-2)',
+          border: '1px solid var(--border)',
+          borderLeft: `4px solid var(--text-${r.level === 'danger' ? 'danger' : 'warning'})`,
+          borderRadius: 10, padding: '12px 13px', marginBottom: 8,
+        }}>
+          <span style={{ fontSize: 17, width: 26, textAlign: 'center', flex: 'none' }}>
+            {r.emoji}
+          </span>
+          <span style={{ minWidth: 0 }}>
+            <span style={{ fontSize: 14, fontWeight: 600, display: 'block' }}>{r.title}</span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{r.sub}</span>
+          </span>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', flex: 'none' }}>›</span>
+        </NavLink>
+      ))}
     </div>
+  );
+}
+
+function PeriodPicker({ period, setPeriod, custom, setCustom }) {
+  return (
+    <>
+      <div style={{
+        display: 'flex', gap: 4, background: 'var(--surface-1)',
+        borderRadius: 9, padding: 3, marginBottom: 12,
+      }}>
+        {PERIODS.map((p) => (
+          <button key={p.id} onClick={() => setPeriod(p.id)}
+            style={{
+              flex: 1, fontSize: 12, padding: '7px 4px', borderRadius: 7,
+              background: period === p.id ? 'var(--surface-2)' : 'transparent',
+              fontWeight: period === p.id ? 600 : 500,
+            }}>
+            {p.label}
+          </button>
+        ))}
+        <button onClick={() => setPeriod('custom')} title="เลือกช่วงเวลา"
+          style={{
+            flex: 'none', width: 40, fontSize: 14, borderRadius: 7,
+            background: period === 'custom' ? 'var(--surface-2)' : 'transparent',
+          }}>
+          📅
+        </button>
+      </div>
+
+      {period === 'custom' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+          {/* The browser's own date picker - on a phone this is the native
+              iOS/Android wheel, which is more familiar than anything we'd
+              build and works without any extra code. */}
+          <input type="date" value={custom.from} max={custom.to || undefined}
+            onChange={(e) => setCustom({ ...custom, from: e.target.value })}
+            style={{ flex: 1, fontSize: 12, minWidth: 0 }} />
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>ถึง</span>
+          <input type="date" value={custom.to} min={custom.from || undefined}
+            onChange={(e) => setCustom({ ...custom, to: e.target.value })}
+            style={{ flex: 1, fontSize: 12, minWidth: 0 }} />
+        </div>
+      )}
+    </>
+  );
+}
+
+function SummaryCard({ summary, period }) {
+  const hourly = period === 'day';
+  const label = (pt) => {
+    const d = new Date(pt.t);
+    return hourly
+      ? d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+  };
+
+  return (
+    <>
+      <div className="card" style={{ padding: '15px 14px 10px', marginBottom: 9 }}>
+        <div style={{
+          display: 'flex', alignItems: 'flex-end',
+          justifyContent: 'space-between', marginBottom: 12,
+        }}>
+          <div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-muted)', fontWeight: 500 }}>
+              ยอดขายรวม
+            </div>
+            <div style={{ fontSize: 25, fontWeight: 700, letterSpacing: -.5, marginTop: 1 }}>
+              {baht(summary.total)}
+            </div>
+          </div>
+          {/* No comparison when there's no previous period to compare with -
+              a made-up 0% would read as a real result. */}
+          {summary.compare && (
+            <span style={{
+              fontSize: 11.5, fontWeight: 600, padding: '3px 8px', borderRadius: 20,
+              color: summary.compare.up ? 'var(--text-success)' : 'var(--text-danger)',
+              background: 'var(--surface-1)',
+            }}>
+              {summary.compare.up ? '↑' : '↓'} {summary.compare.pct}%
+            </span>
+          )}
+        </div>
+
+        <SalesChart points={summary.points} formatLabel={label} formatValue={baht} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 9, marginBottom: 4 }}>
+        <div className="card" style={{ flex: 1, padding: '11px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>
+            กำไรขั้นต้น
+          </div>
+          <div style={{ fontSize: 19, fontWeight: 700, marginTop: 2, color: 'var(--text-success)' }}>
+            {baht(summary.gross_profit)}
+          </div>
+        </div>
+        <div className="card" style={{ flex: 1, padding: '11px 12px' }}>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>
+            จำนวนบิล
+          </div>
+          <div style={{ fontSize: 19, fontWeight: 700, marginTop: 2 }}>
+            {summary.bill_count}
+          </div>
+        </div>
+      </div>
+
+      {/* Menus with no recipe contribute revenue but no cost, so profit
+          reads higher than it is. Saying so beats a confident wrong number. */}
+      {summary.uncosted_menus?.length > 0 && (
+        <p style={{ fontSize: 11, color: 'var(--text-warning)', margin: '8px 2px 0' }}>
+          ⚠ {summary.uncosted_menus.length} เมนูยังไม่ผูกสูตร
+          จึงคิดต้นทุนไม่ได้ — กำไรขั้นต้นจริงจะน้อยกว่านี้{' '}
+          <NavLink to="/recipes" style={{ color: 'var(--accent)' }}>ผูกสูตร</NavLink>
+        </p>
+      )}
+    </>
+  );
+}
+
+function TopItems({ items }) {
+  if (!items || items.length === 0) return null;
+  const top = items[0].qty || 1;
+
+  return (
+    <>
+      <p style={{
+        fontSize: 11, fontWeight: 600, letterSpacing: .6, color: 'var(--text-muted)',
+        textTransform: 'uppercase', margin: '24px 2px 9px',
+      }}>เมนูขายดี</p>
+
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{
+          display: 'flex', gap: 11, padding: '8px 13px',
+          background: 'var(--surface-1)', fontSize: 10.5,
+          color: 'var(--text-muted)', fontWeight: 600,
+        }}>
+          <span style={{ width: 19, textAlign: 'center' }}>#</span>
+          <span style={{ flex: 1 }}>เมนู</span>
+          <span style={{ width: 46, textAlign: 'right' }}>จาน</span>
+          <span style={{ width: 62, textAlign: 'right' }}>ยอดเงิน</span>
+        </div>
+
+        {items.map((m, i) => (
+          <div key={m.name} style={{
+            display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px',
+            borderTop: '1px solid var(--border)',
+          }}>
+            <span style={{
+              width: 19, textAlign: 'center', fontSize: 14, fontWeight: 700,
+              color: i === 0 ? 'var(--accent)' : 'var(--text-muted)',
+            }}>{i + 1}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{
+                fontSize: 13.5, fontWeight: 500, display: 'block',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>{m.name}</span>
+              {/* The bar shows the gap between ranks - knowing #1 sold twice
+                  what #2 did is more useful than knowing it came first. */}
+              <span style={{
+                display: 'block', height: 4, borderRadius: 2,
+                background: 'var(--surface-1)', marginTop: 5, overflow: 'hidden',
+              }}>
+                <i style={{
+                  display: 'block', height: '100%', borderRadius: 2,
+                  background: 'var(--accent)', opacity: .55,
+                  width: `${Math.round((m.qty / top) * 100)}%`,
+                }} />
+              </span>
+            </span>
+            <span style={{ width: 46, textAlign: 'right', fontSize: 13, fontWeight: 600 }}>
+              {m.qty}
+            </span>
+            <span style={{ width: 62, textAlign: 'right', fontSize: 12, color: 'var(--text-muted)' }}>
+              {baht(m.revenue)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function StaffShortcuts() {
+  const links = [
+    { to: '/materials', emoji: '📦', label: 'ของในครัว' },
+    { to: '/receiving', emoji: '🛒', label: 'ซื้อของเข้าร้าน' },
+    { to: '/stock-count', emoji: '📋', label: 'นับของ' },
+    { to: '/recipes', emoji: '🍳', label: 'สูตรอาหาร' },
+  ];
+
+  return (
+    <>
+      <p style={{
+        fontSize: 11, fontWeight: 600, letterSpacing: .6, color: 'var(--text-muted)',
+        textTransform: 'uppercase', margin: '24px 2px 9px',
+      }}>ทำอะไรได้บ้าง</p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 9 }}>
+        {links.map((l) => (
+          <NavLink key={l.to} to={l.to} style={{
+            textDecoration: 'none', color: 'inherit',
+            background: 'var(--surface-2)', border: '1px solid var(--border)',
+            borderRadius: 10, padding: '18px 14px', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 24 }}>{l.emoji}</div>
+            <div style={{ fontSize: 13, fontWeight: 500, marginTop: 6 }}>{l.label}</div>
+          </NavLink>
+        ))}
+      </div>
+    </>
   );
 }

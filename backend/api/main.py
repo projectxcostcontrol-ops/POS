@@ -20,12 +20,13 @@ from dotenv import load_dotenv
 from adapters.loyverse_adapter import LoyverseAdapter
 from storage.firestore_store import Store
 from storage.movement_ledger import MovementLedger
-from core.stock_engine import sync_and_deduct, sync_branch
+from core.stock_engine import sync_and_deduct, sync_branch, backfill_sales
 from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
 from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
+from core import sales_report
 from core.unit_conversion import apply_unit_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
@@ -700,6 +701,92 @@ def skip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
 def unskip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
     c.store.unskip_recipe(store_id, item_name)
     return {"ok": True}
+
+
+# ---- sales reporting (from our own saved copy) -------------------------
+# These read Store.list_sales, never Loyverse. That's what lets a report
+# cover history the POS has already dropped, and keeps the home screen
+# from failing because an external API is slow.
+
+def _window(from_: str | None, to: str | None) -> tuple[str, str]:
+    """Defaults to today when no range is given."""
+    if from_ and to:
+        return from_, to
+    now = datetime.now(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return from_ or start.isoformat(), to or now.isoformat()
+
+
+def _recipes_for(c: Ctx, store_id: str, sales: list[dict]) -> dict:
+    """Only the menus that actually sold in this window - fetching every
+    recipe would cost a read per menu on a store that may have hundreds."""
+    names = {i.get("name") for s in sales for i in s.get("items", []) if i.get("name")}
+    return {n: c.store.get_recipe(store_id, n) for n in names}
+
+
+@app.get("/api/{store_id}/sales/summary")
+def sales_summary(store_id: str, from_: str | None = None, to: str | None = None,
+                  granularity: str = "day", c: Ctx = Depends(store_money)):
+    start, end = _window(from_, to)
+    sales = c.store.list_sales(store_id, start, end)
+    materials = c.store.list_materials(store_id)
+
+    current = sales_report.summarise(
+        sales, _recipes_for(c, store_id, sales), materials, granularity)
+
+    # Compare against the equally-long window just before, so the headline
+    # figure means something on its own.
+    p_start, p_end = sales_report.previous_window(start, end)
+    prev_sales = c.store.list_sales(store_id, p_start, p_end)
+    previous = sales_report.summarise(
+        prev_sales, _recipes_for(c, store_id, prev_sales), materials, granularity)
+
+    return {**current,
+            "from": start, "to": end, "granularity": granularity,
+            "compare": sales_report.compare_previous(current, previous)}
+
+
+@app.get("/api/{store_id}/sales/top-items")
+def sales_top_items(store_id: str, from_: str | None = None, to: str | None = None,
+                    limit: int = 5, c: Ctx = Depends(store_money)):
+    start, end = _window(from_, to)
+    return sales_report.top_items(c.store.list_sales(store_id, start, end), limit)
+
+
+@app.get("/api/{store_id}/sales/daily")
+def sales_daily(store_id: str, from_: str | None = None, to: str | None = None,
+                c: Ctx = Depends(store_money)):
+    start, end = _window(from_, to)
+    return sales_report.daily_breakdown(c.store.list_sales(store_id, start, end))
+
+
+@app.get("/api/{store_id}/alerts")
+def alerts(store_id: str, c: Ctx = Depends(store_ctx)):
+    """Deliberately NOT gated on view_money - staff need to know stock is
+    running out, and none of this exposes takings."""
+    sessions = c.store.list_count_sessions(store_id)
+    last_closed = next((s.get("closed_at") for s in sessions
+                        if s.get("status") == "closed"), None)
+    return sales_report.build_alerts(
+        materials=c.store.list_materials(store_id),
+        pending_drafts=len(c.store.list_drafts(store_id)),
+        last_count_at=last_closed,
+    )
+
+
+@app.post("/api/{store_id}/sales/backfill")
+def run_backfill(store_id: str, c: Ctx = Depends(store_settings)):
+    """Manually pull whatever history the POS plan still allows. Normally
+    happens automatically on first sync; this is here for a branch that
+    connected before saving was added."""
+    try:
+        saved = backfill_sales(c.provider, c.store, store_id)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 402:
+            raise HTTPException(
+                402, "แพ็กเกจ Loyverse ที่ใช้อยู่ดึงย้อนหลังได้ไม่เกิน 30 วัน")
+        raise
+    return {"saved": saved}
 
 
 # ---- stock counts and variance (step 3.4) ------------------------------

@@ -142,6 +142,20 @@ export const api = {
   unskipRecipe: (storeId, itemName) =>
     request(`/api/${storeId}/recipes/skips/${encodeURIComponent(itemName)}`, { method: 'DELETE' }),
 
+  // ---- sales reporting (reads our saved copy, not the POS) ----
+  getSalesSummary: (storeId, from, to, granularity = 'day') =>
+    request(`/api/${storeId}/sales/summary?from_=${encodeURIComponent(from)}` +
+      `&to=${encodeURIComponent(to)}&granularity=${granularity}`),
+  getTopItems: (storeId, from, to, limit = 5) =>
+    request(`/api/${storeId}/sales/top-items?from_=${encodeURIComponent(from)}` +
+      `&to=${encodeURIComponent(to)}&limit=${limit}`),
+  getDailySales: (storeId, from, to) =>
+    request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +
+      `&to=${encodeURIComponent(to)}`),
+  getAlerts: (storeId) => request(`/api/${storeId}/alerts`),
+  backfillSales: (storeId) =>
+    request(`/api/${storeId}/sales/backfill`, { method: 'POST' }),
+
   // ---- stock counts & variance (3.4) ----
   listCounts: (storeId) => request(`/api/${storeId}/counts`),
   getOpenCount: (storeId) => request(`/api/${storeId}/counts/open`),
@@ -173,7 +187,9 @@ export const api = {
       { method: 'POST' }
     ),
 
-  getReceipts: (storeId) => request(`/api/${storeId}/receipts`),
+  getReceipts: (storeId, from) =>
+    request(`/api/${storeId}/receipts` +
+      (from ? `?created_at_min=${encodeURIComponent(from)}` : '')),
 
   // ---- signup (before the user belongs to any business) ----
   signupBusiness: (businessName, displayName) =>

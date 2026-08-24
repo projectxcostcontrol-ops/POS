@@ -50,7 +50,7 @@ export default function Items() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>รายการสินค้า</p>
+        <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>เมนูในร้าน</p>
         <button onClick={() => window.open('https://r.loyverse.com/dashboard/#/items/inventory', '_blank')}>
           + เพิ่มเมนู (เปิด Loyverse)
         </button>

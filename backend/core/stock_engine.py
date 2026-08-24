@@ -27,15 +27,26 @@ SYNC_OVERLAP_SECONDS = 300
 
 def sync_and_deduct(provider: PosProvider, store: Store, store_id: str,
                      created_at_min: str | None = None) -> int:
-    """Pull new receipts and deduct recipe ingredients for each one sold.
-    Returns the number of receipts processed. Safe to call repeatedly -
-    already-processed receipts are skipped."""
+    """Pull new receipts, deduct recipe ingredients, and keep our own copy
+    of what sold. Returns the number of receipts processed. Safe to call
+    repeatedly - already-processed receipts are skipped."""
     receipts = provider.get_receipts(store_id, created_at_min=created_at_min)
     processed_count = 0
 
     for receipt in receipts:
         number = receipt["receipt_number"]
-        if not number or store.is_receipt_processed(store_id, number):
+        if not number:
+            continue
+
+        # Saving the sale happens BEFORE the processed check, because the
+        # two answer different questions. "Processed" means stock was
+        # already deducted and must not be deducted twice; the sales copy
+        # is just a record, and re-saving it overwrites harmlessly. Putting
+        # the save after the check would silently skip every receipt in
+        # the overlap window and leave gaps in the history.
+        _save_sale(store, store_id, receipt)
+
+        if store.is_receipt_processed(store_id, number):
             continue
 
         for line in receipt["line_items"]:
@@ -49,6 +60,57 @@ def sync_and_deduct(provider: PosProvider, store: Store, store_id: str,
         processed_count += 1
 
     return processed_count
+
+
+def _save_sale(store: Store, store_id: str, receipt: dict):
+    """Keep the fields the reports actually need, not the whole Loyverse
+    payload - line items with names and quantities, the total, and when.
+    Everything else can be re-fetched from Loyverse while it's still
+    within their window, and is dead weight afterwards."""
+    number = receipt.get("receipt_number")
+    if not number:
+        return
+    store.save_sale(store_id, number, {
+        "receipt_number": number,
+        "date": receipt.get("created_at") or "",
+        "total": receipt.get("total") or 0,
+        "items": [
+            {
+                "name": li.get("item_name") or "",
+                "qty": li.get("quantity") or 0,
+                "price": li.get("price") or 0,
+            }
+            for li in receipt.get("line_items", [])
+        ],
+    })
+
+
+def backfill_sales(provider: PosProvider, store: Store, store_id: str) -> int:
+    """Pull whatever history the POS plan still allows and save a copy, run
+    once when a branch first connects.
+
+    Without this, a business that connects today starts with an empty
+    sales history and has to wait a month before any monthly view means
+    anything - while the previous month's data was sitting in Loyverse,
+    reachable, right up until it aged out. This grabs it while it's there.
+
+    Deliberately does NOT deduct stock: those sales happened before the
+    branch had recipes, and deducting them now would drive stock negative
+    against ingredients that were never tracked."""
+    if store.has_backfilled_sales(store_id):
+        return 0
+
+    receipts = provider.get_receipts(store_id)
+    for receipt in receipts:
+        _save_sale(store, store_id, receipt)
+        # Mark as processed so the first real sync doesn't deduct stock for
+        # sales that happened before this branch was even set up.
+        number = receipt.get("receipt_number")
+        if number:
+            store.mark_receipt_processed(store_id, number)
+
+    store.mark_sales_backfilled(store_id, _utcnow_iso())
+    return len(receipts)
 
 
 def sync_branch(provider: PosProvider, store: Store, store_id: str,
@@ -70,6 +132,13 @@ def sync_branch(provider: PosProvider, store: Store, store_id: str,
     now = _utcnow_iso()
 
     if cursor is None:
+        # Grab whatever history the POS still has before starting the
+        # cursor - see backfill_sales. Failing here must not block the
+        # branch from syncing going forward, so it's best-effort.
+        try:
+            backfill_sales(provider, store, store_id)
+        except Exception as e:
+            print(f"[sync] backfill skipped for {store_id}: {e}")
         store.set_sync_cursor(store_id, now)
         return 0
 

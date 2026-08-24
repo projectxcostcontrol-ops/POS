@@ -168,6 +168,26 @@ If a cursor ever ends up stuck or wrong, **Settings → รีเซ็ตจุ
 re-establishes it at "now", exactly like a fresh connection. It does not
 back-fill anything skipped in between.
 
+### Loyverse's 31-day sales history limit
+
+On Loyverse's **free plan**, the API refuses any receipt older than 31
+days with a 402. This is their billing limit, not something the app can
+work around, and it means:
+
+- Sales history in this app reaches back about 30 days. Loyverse refuses anything "earlier than 31 days ago", so queries stay a day inside that edge - asking for exactly 31 lands on the boundary and is refused outright.
+- Receipt queries default to that window rather than asking for
+  everything, so no call is wasted discovering a limit we already know.
+- If the refusal arrives partway through paging (page 1 fine, page 2 too
+  old), the receipts already fetched are kept and shown. Discarding them
+  would blank a screen whose recent sales had loaded perfectly well.
+
+To reach further back, subscribe to **Unlimited sales history** in
+Loyverse. Nothing needs changing here afterwards - the app will simply
+get more data back.
+
+For stock deduction and monthly costing, 31 days is normally plenty: the
+sync cursor only ever asks for receipts since the last sync anyway.
+
 ---
 
 ## Local development

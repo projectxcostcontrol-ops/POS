@@ -76,7 +76,7 @@ export default function Materials() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>วัตถุดิบและสต๊อก</p>
+        <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>ของในครัว</p>
         <button onClick={() => setEditing({})}>+ เพิ่มวัตถุดิบ</button>
       </div>
 
@@ -87,7 +87,7 @@ export default function Materials() {
         }}>
           ⚠ สต๊อกติดลบ: {negatives.map((m) => `${m.name} (${m.stock})`).join(', ')}
           <div style={{ fontSize: 12, marginTop: 4 }}>
-            แปลว่าสูตรอาจใส่ปริมาณมากเกินจริง หรือยังไม่ได้บันทึกของที่รับเข้ามา - ตรวจสอบแล้วนับสต๊อกใหม่
+            แปลว่าสูตรอาจใส่ปริมาณมากเกินจริง หรือยังไม่ได้บันทึกของที่ซื้อเข้ามา - ตรวจสอบแล้วนับของใหม่
           </div>
         </div>
       )}
@@ -192,8 +192,8 @@ export default function Materials() {
             }}>
               การแก้ตรงนี้จะ<b>ไม่ถูกนับเป็นส่วนต่าง</b>ในรายงาน และจะกลบส่วนต่างที่สะสมอยู่ด้วย
               <br />
-              ถ้ากำลังนับสต๊อกตามรอบ ให้ใช้หน้า{' '}
-              <a href="/stock-count" style={{ color: 'var(--accent)' }}>นับสต๊อก</a> แทน
+              ถ้ากำลังนับของตามรอบ ให้ใช้หน้า{' '}
+              <a href="/stock-count" style={{ color: 'var(--accent)' }}>นับของ</a> แทน
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setAdjusting(null)}>ยกเลิก</button>
@@ -211,7 +211,7 @@ export default function Materials() {
 }
 
 const KIND_LABEL = {
-  receive: 'รับเข้า', sale: 'ขาย', count: 'นับสต๊อก', waste: 'ของเสีย',
+  receive: 'ซื้อเข้า', sale: 'ขาย', count: 'นับของ', waste: 'ของเสีย',
 };
 
 function HistoryModal({ storeId, material, onClose }) {
@@ -281,7 +281,7 @@ function EditModal({ material, onCancel, onSave }) {
         <input type="number" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })}
           style={{ width: '100%', margin: '4px 0 4px' }} />
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          ใช้จนกว่าจะมีการรับของเข้าครั้งแรก จากนั้นระบบจะใช้ต้นทุนเฉลี่ยจริงแทน
+          ใช้จนกว่าจะซื้อของเข้าครั้งแรก จากนั้นระบบจะใช้ต้นทุนเฉลี่ยจริงแทน
         </p>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>จำนวนที่ควรมีสต๊อก (par)</label>
         <input type="number" value={form.par} onChange={(e) => setForm({ ...form, par: e.target.value })}

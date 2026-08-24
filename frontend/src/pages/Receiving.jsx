@@ -47,29 +47,36 @@ export default function Receiving() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, gap: 8, flexWrap: 'wrap' }}>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>รับของเข้า</p>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input type="file" accept="image/*" ref={fileInputRef} style={{ display: 'none' }}
-            onChange={handleFileSelected} />
-          <button onClick={() => fileInputRef.current?.click()} disabled={scanning}>
-            {scanning ? 'กำลังอ่าน...' : '📷 ถ่ายรูปใบส่งของ'}
-          </button>
-          <button onClick={() => setShowForm(true)}>+ กรอกเอง</button>
-        </div>
-      </div>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
-        ถ่ายรูปแล้ว AI จะอ่านให้ - ตรวจสอบก่อนกด Confirm สต๊อกและต้นทุนถึงจะอัปเดต
+      <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>ซื้อของเข้าร้าน</p>
+      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 14px' }}>
+        ถ่ายรูปใบส่งของแล้ว AI จะอ่านให้ - ตรวจก่อนกดยืนยัน สต๊อกและต้นทุนถึงจะอัปเดต
       </p>
+
+      {/* The scan button leads, because people open this page to record a
+          delivery, not to browse past ones. */}
+      <input type="file" accept="image/*" ref={fileInputRef} style={{ display: 'none' }}
+        onChange={handleFileSelected} />
+      <button onClick={() => fileInputRef.current?.click()} disabled={scanning}
+        style={{
+          width: '100%', padding: 15, fontSize: 15, fontWeight: 600,
+          borderRadius: 12, background: 'var(--accent)', color: '#fff',
+        }}>
+        {scanning ? 'กำลังอ่าน...' : '📷 ถ่ายใบส่งของ ให้ AI อ่านให้'}
+      </button>
+      <button onClick={() => setShowForm(true)}
+        style={{ width: '100%', padding: 12, marginTop: 8, fontSize: 13 }}>
+        ✏️ กรอกเอง
+      </button>
+      <div style={{ height: 16 }} />
       {scanError && <p style={{ fontSize: 12, color: 'var(--text-danger)', marginBottom: 12 }}>{scanError}</p>}
 
       {drafts.length > 0 && (
         <div className="card" style={{ marginBottom: 16, borderColor: 'var(--text-warning)' }}>
           <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>
-            ⚠ ร่างที่รอตรวจสอบ ({drafts.length})
+            ⚠ รอตรวจก่อนเข้าสต๊อก ({drafts.length})
           </p>
           <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-            ยังไม่เข้าสต๊อกจนกว่าจะตรวจสอบและกด Confirm
+            ยังไม่เข้าสต๊อกจนกว่าจะตรวจและกดยืนยัน
           </p>
           {drafts.map((d, idx) => (
             <div key={d.id} style={{
@@ -85,7 +92,7 @@ export default function Receiving() {
 
       <div className="card">
         {receivings.length === 0 && (
-          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>ยังไม่มีประวัติการรับของ</p>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>ยังไม่มีประวัติการซื้อของ</p>
         )}
         {receivings.map((r, idx) => (
           <div key={r.id} style={{

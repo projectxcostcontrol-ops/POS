@@ -47,20 +47,24 @@ class FakeProvider:
         return self.receipts
 
 
-def test_a_brand_new_branch_never_pulls_full_history():
-    section("First sync for a branch fetches NOTHING - it only sets the starting line")
-    # This is the actual fix: the old code asked Loyverse for every receipt
-    # ever, on the very first sync of a real branch. That single request
-    # against months of history is what "stuck" looked like.
+def test_a_brand_new_branch_deducts_nothing_and_starts_its_cursor():
+    section("First sync deducts no stock - it backfills history and sets the starting line")
+    # The original bug: the first sync asked Loyverse for every receipt ever
+    # and deducted against all of them. The one fetch it makes now is the
+    # history backfill, which SAVES sales for reporting but deliberately
+    # deducts nothing - those sales predate the branch's recipes, so
+    # deducting them would invent a shortage on day one.
     from core.stock_engine import sync_branch
 
     store = make_test_store()
-    provider = FakeProvider(receipts=[{"receipt_number": "1", "line_items": []}])
+    provider = FakeProvider(receipts=[
+        {"receipt_number": "1", "created_at": "2026-08-01T10:00:00+00:00",
+         "total": 100, "line_items": []}])
 
     processed = sync_branch(provider, store, "branch1")
 
-    check("nothing processed on the first call", processed, 0)
-    check("the provider was never even asked for receipts", provider.calls, [])
+    check("nothing processed for stock", processed, 0)
+    check("history was saved for reporting", len(store.list_sales("branch1")), 1)
     check("a cursor now exists", store.get_sync_cursor("branch1") is not None, True)
 
 
@@ -71,14 +75,13 @@ def test_a_second_sync_only_asks_for_whats_new():
     store = make_test_store()
     provider = FakeProvider(receipts=[])
 
-    sync_branch(provider, store, "branch1")            # establishes the cursor
-    first_cursor = store.get_sync_cursor("branch1")
+    sync_branch(provider, store, "branch1")            # backfill + establishes cursor
+    sync_branch(provider, store, "branch1")            # the real sync
 
-    sync_branch(provider, store, "branch1")             # the real sync
-
-    check("exactly one request made to Loyverse", len(provider.calls), 1)
-    check("that request used the saved cursor, not None (which means 'everything')",
-          provider.calls[0] is not None, True)
+    check("two fetches total: one backfill, one incremental", len(provider.calls), 2)
+    check("the backfill asked for everything available", provider.calls[0], None)
+    check("the real sync used the saved cursor, not None",
+          provider.calls[1] is not None, True)
 
 
 def test_cursor_never_moves_backward():
@@ -202,12 +205,42 @@ def test_a_cursor_saved_by_an_older_version_still_parses():
     check("and the arithmetic is still right", out, "2026-08-23T16:50:43.953Z")
 
 
+def test_a_legacy_cursor_in_storage_is_converted_before_being_sent():
+    section("A cursor left by an older version is normalized on READ, not just on write")
+    # This is the exact production failure: a cursor saved as Python's
+    # isoformat ('+00:00', microseconds) was sent to Loyverse verbatim and
+    # rejected with INVALID_VALUE. Because the rejection happened BEFORE
+    # the cursor was rewritten, the bad value survived every retry - the
+    # branch could never heal itself, and each sync failed identically.
+    # Converting on read is what breaks that loop, so the check that
+    # matters is what the provider actually receives.
+    import re
+    from core.stock_engine import sync_branch
+
+    store = make_test_store()
+    provider = FakeProvider(receipts=[])
+    store.set_sync_cursor("branch1", "2026-08-23T16:55:43.953470+00:00")
+
+    sync_branch(provider, store, "branch1")
+
+    # A cursor already exists, so there's no backfill - the first call is
+    # the real fetch.
+    sent = provider.calls[0]
+    check("the value SENT to Loyverse is in Loyverse's format",
+          bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", sent)), True)
+    check("and it's the same moment, not a reset", sent, "2026-08-23T16:55:43.953Z")
+    check("the stored cursor is rewritten in the new format too",
+          bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z",
+                            store.get_sync_cursor("branch1"))), True)
+
+
 def main():
     print("Running sync cursor tests (offline)")
 
     test_cursor_uses_the_exact_format_loyverse_demands()
     test_a_cursor_saved_by_an_older_version_still_parses()
-    test_a_brand_new_branch_never_pulls_full_history()
+    test_a_legacy_cursor_in_storage_is_converted_before_being_sent()
+    test_a_brand_new_branch_deducts_nothing_and_starts_its_cursor()
     test_a_second_sync_only_asks_for_whats_new()
     test_cursor_never_moves_backward()
     test_cursor_has_overlap_not_an_exact_boundary()

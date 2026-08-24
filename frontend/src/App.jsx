@@ -3,9 +3,11 @@ import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-do
 import { StoreProvider } from './store/StoreContext';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { api } from './api/client';
+import { SIDEBAR_GROUPS, TABS } from './nav';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
+import More from './pages/More';
 import Items from './pages/Items';
 import Materials from './pages/Materials';
 import Receiving from './pages/Receiving';
@@ -18,23 +20,7 @@ import Settings from './pages/Settings';
 import Users from './pages/Users';
 import Admin from './pages/Admin';
 
-// `needs` is the capability required to see a page. Pages without one are
-// available to anyone signed in. This drives the menu only - the backend
-// enforces the same rules independently, so hiding a link is convenience,
-// not security.
-const NAV = [
-  { to: '/', label: 'หน้าแรก', end: true, needs: 'view_money' },
-  { to: '/items', label: 'รายการสินค้า' },
-  { to: '/materials', label: 'วัตถุดิบและสต๊อก' },
-  { to: '/receiving', label: 'รับของเข้า' },
-  { to: '/recipes', label: 'สูตรอาหาร' },
-  { to: '/stock-count', label: 'นับสต๊อก' },
-  { to: '/variance', label: 'วิเคราะห์ส่วนต่าง', needs: 'view_money' },
-  { to: '/receipts', label: 'รายการบิล', needs: 'view_money' },
-  { to: '/income-expense', label: 'รายรับรายจ่าย', needs: 'view_money' },
-  { to: '/users', label: 'ผู้ใช้งาน', needs: 'manage_users' },
-  { to: '/settings', label: 'ตั้งค่า', needs: 'manage_settings' },
-];
+const ROLE_LABEL = { owner: 'เจ้าของ', manager: 'ผู้จัดการ', staff: 'พนักงาน' };
 
 export default function App() {
   return (
@@ -72,9 +58,11 @@ function AuthGate() {
 function AppShell() {
   const { profile, signOut, can } = useAuth();
   const [isAdmin, setIsAdmin] = useState(false);
-  const visibleNav = NAV.filter((item) => !item.needs || can(item.needs));
-  // Staff can't see the dashboard, so send them somewhere they can use.
-  const homePath = can('view_money') ? '/' : '/materials';
+
+  // Everyone lands on the home page now. It shows staff the alerts and
+  // shortcuts they can act on, and hides the money figures - so there's
+  // no longer a reason to bounce them somewhere else on login.
+  const homePath = '/';
 
   // The admin link only appears for the handful of emails configured on the
   // backend. Asking is harmless - a normal user gets a 404 and simply never
@@ -82,6 +70,8 @@ function AppShell() {
   useEffect(() => {
     api.adminWhoami().then(() => setIsAdmin(true)).catch(() => setIsAdmin(false));
   }, []);
+
+  const allowed = (item) => !item.needs || can(item.needs);
 
   return (
     <BrowserRouter>
@@ -96,28 +86,43 @@ function AppShell() {
               {profile.business_name}
             </p>
           )}
-          {visibleNav.map((item) => (
-            <NavLink key={item.to} to={item.to} end={item.end}
-              className={({ isActive }) => (isActive ? 'active' : '')}>
-              {item.label}
-            </NavLink>
-          ))}
+
+          {SIDEBAR_GROUPS.map((group) => {
+            const items = group.items.filter(allowed);
+            if (items.length === 0) return null;
+            return (
+              <div key={group.title}>
+                <div className="nav-group">{group.title}</div>
+                {items.map((item) => (
+                  <NavLink key={item.to} to={item.to} end={item.end}
+                    className={({ isActive }) => (isActive ? 'active' : '')}>
+                    {item.label}
+                  </NavLink>
+                ))}
+              </div>
+            );
+          })}
+
           {isAdmin && (
-            <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
-              ภาพรวมระบบ
-            </NavLink>
+            <div>
+              <div className="nav-group">ระบบ</div>
+              <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
+                ภาพรวมระบบ
+              </NavLink>
+            </div>
           )}
+
           <div style={{ marginTop: 'auto', paddingTop: 16, fontSize: 11, color: 'var(--text-muted)' }}>
             <p style={{ margin: '0 0 2px', wordBreak: 'break-all' }}>{profile.email}</p>
-            <p style={{ margin: '0 0 8px' }}>
-              {{ owner: 'เจ้าของ', manager: 'ผู้จัดการ', staff: 'พนักงาน' }[profile.role]}
-            </p>
+            <p style={{ margin: '0 0 8px' }}>{ROLE_LABEL[profile.role]}</p>
             <button onClick={signOut} style={{ fontSize: 11, width: '100%' }}>ออกจากระบบ</button>
           </div>
         </nav>
+
         <main className="content">
           <Routes>
-            <Route path="/" element={can('view_money') ? <Dashboard /> : <Navigate to={homePath} replace />} />
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/more" element={<More />} />
             <Route path="/items" element={<Items />} />
             <Route path="/materials" element={<Materials />} />
             <Route path="/receiving" element={<Receiving />} />
@@ -132,6 +137,17 @@ function AppShell() {
             <Route path="*" element={<Navigate to={homePath} replace />} />
           </Routes>
         </main>
+
+        {/* Phone only - CSS hides this above 720px, where the sidebar takes over. */}
+        <nav className="tabbar">
+          {TABS.map((tab) => (
+            <NavLink key={tab.to} to={tab.to} end={tab.end}
+              className={({ isActive }) => (isActive ? 'active' : '')}>
+              <span className="emoji">{tab.emoji}</span>
+              {tab.short || tab.label}
+            </NavLink>
+          ))}
+        </nav>
       </div>
     </BrowserRouter>
   );

@@ -100,16 +100,16 @@ export default function StockCount() {
   if (!session) {
     return (
       <div>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>นับสต๊อก</p>
+        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>นับของ</p>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
-          นับของจริงในครัวแล้วบันทึก เพื่อเทียบกับที่ระบบคำนวณไว้ — เป็นข้อมูลตั้งต้นของหน้าวิเคราะห์ส่วนต่าง
+          นับของจริงในครัวแล้วบันทึก ระบบจะได้บอกได้ว่าของหายไปเท่าไหร่
         </p>
 
         <div className="card" style={{ marginBottom: 16 }}>
           <p style={{ fontSize: 13, margin: '0 0 12px' }}>
             {lastClosed
               ? `รอบล่าสุด: ${formatDate(lastClosed.closed_at)}`
-              : 'ยังไม่เคยนับสต๊อก — รอบแรกจะเป็นจุดตั้งต้น ยังเทียบส่วนต่างไม่ได้จนกว่าจะนับรอบที่สอง'}
+              : 'ยังไม่เคยนับของ — รอบแรกเป็นจุดตั้งต้น ต้องนับรอบที่สองถึงจะเทียบได้ว่าหายไปเท่าไหร่'}
           </p>
           <button onClick={start} disabled={busy} style={{ background: 'var(--surface-1)' }}>
             {busy ? 'กำลังเปิด...' : 'เริ่มนับรอบใหม่'}

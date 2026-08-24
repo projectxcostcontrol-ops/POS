@@ -44,10 +44,10 @@ export default function Variance() {
   if (sessions.length === 0) {
     return (
       <div>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>วิเคราะห์ส่วนต่าง</p>
+        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>ของหายไปไหน</p>
         <div className="card" style={{ marginTop: 12 }}>
           <p style={{ fontSize: 13, margin: 0 }}>
-            ยังไม่มีรอบนับสต๊อกที่ปิดแล้ว — ไปที่หน้า "นับสต๊อก" เพื่อนับรอบแรกก่อน
+            ยังไม่มีรอบนับที่ปิดแล้ว — ไปที่หน้า "นับของ" เพื่อนับรอบแรกก่อน
           </p>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '8px 0 0' }}>
             ระบบเทียบได้เฉพาะกับของที่นับจริงเท่านั้น ถ้าไม่นับ ตัวเลขในระบบก็คือตัวเลขที่คำนวณจากสูตร
@@ -62,9 +62,9 @@ export default function Variance() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
-          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>วิเคราะห์ส่วนต่าง</p>
+          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>ของหายไปไหน</p>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
-            เทียบของที่นับได้จริง กับที่ระบบคำนวณไว้จากสูตรและยอดขาย
+            เทียบของที่นับได้จริง กับที่ควรเหลือตามสูตรและยอดขาย
           </p>
         </div>
         <select value={selected} onChange={(e) => setSelected(e.target.value)} style={{ fontSize: 12 }}>

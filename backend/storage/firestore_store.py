@@ -437,6 +437,45 @@ class Store:
     def set_sync_cursor(self, store_id: str, synced_up_to: str):
         self._col(store_id, "sync_state").document("cursor").set({"synced_up_to": synced_up_to})
 
+    # ---- saved sales (our own copy of what sold) ----
+    # Loyverse's free plan refuses receipts older than 31 days, so a
+    # business that relies on reading them back loses its own history a
+    # month at a time. Keeping a copy as each receipt is synced turns that
+    # into a limit on how far back a NEW connection can see, rather than a
+    # ceiling that never moves: after a month of use there's a month of
+    # history here, after a year there's a year.
+    #
+    # Keyed by receipt number so re-syncing the same receipt overwrites
+    # rather than double-counting - the overlap window in sync_branch
+    # deliberately re-fetches a few minutes of receipts every time.
+
+    def save_sale(self, store_id: str, receipt_number: str, data: dict):
+        self._col(store_id, "sales").document(receipt_number).set(data)
+
+    def list_sales(self, store_id: str, start: str | None = None,
+                   end: str | None = None) -> list[dict]:
+        """Sales in a date window, oldest first. Dates are ISO strings and
+        compare correctly as text, which keeps this a simple range scan."""
+        sales = []
+        for d in self._col(store_id, "sales").stream():
+            row = d.to_dict() or {}
+            at = row.get("date") or ""
+            if start and at < start:
+                continue
+            if end and at > end:
+                continue
+            sales.append(row)
+        sales.sort(key=lambda r: r.get("date") or "")
+        return sales
+
+    def has_backfilled_sales(self, store_id: str) -> bool:
+        doc = self._col(store_id, "sync_state").document("backfill").get()
+        return bool((doc.to_dict() or {}).get("done")) if doc.exists else False
+
+    def mark_sales_backfilled(self, store_id: str, at: str):
+        self._col(store_id, "sync_state").document("backfill").set(
+            {"done": True, "at": at})
+
     # ---- AI recipe drafts (step 3.3) ----
     # A draft is a proposal, not a recipe. It holds which ingredients a
     # menu probably uses; the quantities are still blank because a person
