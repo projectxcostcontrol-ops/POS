@@ -29,11 +29,16 @@ DEFAULT_TIMEOUT = (10, 30)
 # instead of hanging just as silently as the missing timeout did.
 MAX_PAGES = 1000
 
-# Loyverse's free plan refuses receipts older than this with a 402. It's
-# their limit, not ours, but the fetch has to know about it: without a
-# default window every receipt query paginates backwards until the API
-# refuses, which is slow and tells us nothing we don't already know.
-FREE_PLAN_HISTORY_DAYS = 31
+# Loyverse's free plan refuses receipts "created earlier than 31 days
+# ago" with a 402. 31 is their cliff edge, not a safe window: asking for
+# exactly 31 days lands on the boundary and gets the whole request
+# refused, since the timestamp is already fractionally too old by the
+# time it reaches them. Asking for 30 stays clearly inside it.
+#
+# The window also has to exist at all - without one, every receipt query
+# pages backwards until the API refuses, spending calls to discover a
+# limit we already know about.
+FREE_PLAN_HISTORY_DAYS = 30
 
 
 def _days_ago(days: int) -> str:
@@ -125,19 +130,32 @@ class LoyverseClient:
         """
         created_at_min / created_at_max: ISO 8601 strings, e.g. '2026-07-01T00:00:00.000Z'
 
-        With no created_at_min, this defaults to the last 31 days rather
-        than everything. Loyverse's free plan refuses receipts older than
-        that outright (402 PAYMENT_REQUIRED), so asking for more means
-        paginating until the API says no - slower, and it wastes calls to
-        learn something we already know. Accounts on Unlimited sales
-        history can pass an explicit created_at_min to reach further back.
+        With no created_at_min, this defaults to the recent window the
+        free plan allows rather than everything - see
+        FREE_PLAN_HISTORY_DAYS.
+
+        If an explicit date is older than that and the account turns out
+        to be on the free plan, the request is retried once against the
+        allowed window. The alternative - clamping every date up front -
+        would quietly cripple accounts that pay for Unlimited sales
+        history, so the further-back request is attempted first and only
+        narrowed if Loyverse actually refuses it.
         """
-        params = {}
-        params["created_at_min"] = created_at_min or _days_ago(FREE_PLAN_HISTORY_DAYS)
+        window_start = _days_ago(FREE_PLAN_HISTORY_DAYS)
+        params = {"created_at_min": created_at_min or window_start}
         if created_at_max:
             params["created_at_max"] = created_at_max
-        return self._paginate("/receipts", "receipts", params,
-                              stop_on_payment_required=True)
+
+        try:
+            return self._paginate("/receipts", "receipts", params,
+                                  stop_on_payment_required=True)
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status != 402 or params["created_at_min"] >= window_start:
+                raise
+            params["created_at_min"] = window_start
+            return self._paginate("/receipts", "receipts", params,
+                                  stop_on_payment_required=True)
 
     def get_employees(self) -> list[dict]:
         return self._paginate("/employees", "employees")
