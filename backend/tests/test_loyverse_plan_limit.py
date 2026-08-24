@@ -23,7 +23,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import requests
 
-from adapters._loyverse_client import LoyverseClient, FREE_PLAN_HISTORY_DAYS, _days_ago
+from adapters._loyverse_client import (LoyverseClient, FREE_PLAN_HISTORY_DAYS,
+                                       _days_ago, normalize_time)
 
 _results = []
 
@@ -195,12 +196,45 @@ def test_pagination_still_completes_normally():
     check("the cursor was passed along", client._calls[1]["cursor"], "p2")
 
 
+def test_every_timestamp_is_normalized_at_the_door():
+    section("Whatever format a caller passes, Loyverse receives its own")
+    # Python's isoformat() gives '+00:00' and microseconds; Loyverse
+    # rejects both with a flat INVALID_VALUE. That mistake was made in
+    # three separate call sites before the conversion was moved here, to
+    # the one place every request passes through. Callers can now be
+    # careless and still be correct.
+    pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z"
+
+    for raw in ["2026-08-23T00:00:00+00:00",          # isoformat, no micros
+                "2026-08-23T00:00:00.123456+00:00",   # isoformat with micros
+                "2026-08-23T00:00:00.000Z",           # already correct
+                "2026-08-23T00:00:00"]:               # naive, no zone
+        out = normalize_time(raw)
+        check(f"{raw[:28]:28} normalizes",
+              bool(re.fullmatch(pattern, out)), True)
+
+    check("None passes through untouched", normalize_time(None), None)
+
+
+def test_a_callers_bad_format_never_reaches_the_api():
+    section("A sloppy caller can't send a rejected timestamp any more")
+    client = make_client([{"receipts": [], "cursor": None}])
+    client.get_receipts(created_at_min="2026-08-23T00:00:00+00:00")
+
+    sent = client._calls[0]["created_at_min"]
+    check("what actually went out is in Loyverse's format",
+          bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", sent)), True)
+    check("and it's the same moment", sent, "2026-08-23T00:00:00.000Z")
+
+
 def main():
     print("Running Loyverse plan-limit tests (offline, no network)")
 
     test_receipts_already_fetched_survive_a_402_on_a_later_page()
     test_a_402_on_the_very_first_page_still_raises()
     test_other_errors_are_never_swallowed()
+    test_every_timestamp_is_normalized_at_the_door()
+    test_a_callers_bad_format_never_reaches_the_api()
     test_receipts_default_to_the_plan_window()
     test_the_window_stays_inside_the_cliff_edge()
     test_a_too_old_explicit_date_is_retried_within_the_allowed_window()

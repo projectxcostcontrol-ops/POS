@@ -271,6 +271,10 @@ def test_previous_window_is_the_same_length_immediately_before():
     check("ends exactly where the current window starts",
           end.startswith("2026-08-18"), True)
     check("and starts seven days before that", start.startswith("2026-08-11"), True)
+    # Same canonical format as the saved sale dates it will be compared to.
+    import re as _re
+    check("emitted in the canonical format",
+          bool(_re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", start)), True)
 
 
 # ---------- alerts ----------

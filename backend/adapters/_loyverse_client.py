@@ -41,10 +41,34 @@ MAX_PAGES = 1000
 FREE_PLAN_HISTORY_DAYS = 30
 
 
-def _days_ago(days: int) -> str:
+def _fmt(dt: datetime) -> str:
     """Loyverse's required timestamp format: YYYY-MM-DDTHH:mm:ss.sssZ."""
-    dt = datetime.now(timezone.utc) - timedelta(days=days)
+    dt = dt.astimezone(timezone.utc)
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
+def _days_ago(days: int) -> str:
+    return _fmt(datetime.now(timezone.utc) - timedelta(days=days))
+
+
+def normalize_time(value: str | None) -> str | None:
+    """Coerce any ISO-ish timestamp into the one format Loyverse accepts.
+
+    Python's isoformat() produces '+00:00' and microseconds, which
+    Loyverse rejects outright with INVALID_VALUE. That mistake has now
+    been made three times in three different call sites, so the
+    conversion lives HERE - at the single door every request goes
+    through - rather than depending on each caller remembering. Callers
+    can pass whatever they have."""
+    if not value:
+        return value
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value   # not something we can parse; let the API judge it
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return _fmt(dt)
 
 
 class LoyverseClient:
@@ -142,9 +166,10 @@ class LoyverseClient:
         narrowed if Loyverse actually refuses it.
         """
         window_start = _days_ago(FREE_PLAN_HISTORY_DAYS)
-        params = {"created_at_min": created_at_min or window_start}
+        # Normalized here so no caller can get the format wrong.
+        params = {"created_at_min": normalize_time(created_at_min) or window_start}
         if created_at_max:
-            params["created_at_max"] = created_at_max
+            params["created_at_max"] = normalize_time(created_at_max)
 
         try:
             return self._paginate("/receipts", "receipts", params,

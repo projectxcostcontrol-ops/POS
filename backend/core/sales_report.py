@@ -18,6 +18,12 @@ incomplete is worse than one that says so.
 from datetime import datetime, timedelta, timezone
 
 
+def _fmt(dt: datetime) -> str:
+    """The one timestamp format used across storage and queries."""
+    dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
 def _parse(iso: str) -> datetime | None:
     if not iso:
         return None
@@ -153,7 +159,9 @@ def previous_window(start: str, end: str) -> tuple[str, str]:
     if s is None or e is None:
         return start, end
     span = e - s
-    return (s - span).isoformat(), s.isoformat()
+    # Same canonical format as everything else - these bounds are compared
+    # as strings against saved sale dates.
+    return _fmt(s - span), _fmt(s)
 
 
 def build_alerts(materials: list[dict], pending_drafts: int,

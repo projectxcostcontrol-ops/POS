@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from adapters.loyverse_adapter import LoyverseAdapter
+from adapters._loyverse_client import normalize_time
 from storage.firestore_store import Store
 from storage.movement_ledger import MovementLedger
 from core.stock_engine import sync_and_deduct, sync_branch, backfill_sales
@@ -709,12 +710,17 @@ def unskip_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
 # from failing because an external API is slow.
 
 def _window(from_: str | None, to: str | None) -> tuple[str, str]:
-    """Defaults to today when no range is given."""
-    if from_ and to:
-        return from_, to
+    """Defaults to today when no range is given.
+
+    Both ends come back in the same format the saved sale dates use.
+    list_sales compares these as strings, and '2026-08-24T00:00:00.000Z'
+    and '2026-08-24T00:00:00+00:00' are the same instant that compare as
+    different text - so a boundary sale falls in or out of the window
+    depending on which format happened to build it."""
     now = datetime.now(timezone.utc)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return from_ or start.isoformat(), to or now.isoformat()
+    return (normalize_time(from_) or normalize_time(start.isoformat()),
+            normalize_time(to) or normalize_time(now.isoformat()))
 
 
 def _recipes_for(c: Ctx, store_id: str, sales: list[dict]) -> dict:
@@ -790,7 +796,7 @@ def reconcile_sales(store_id: str, days: int = 1, c: Ctx = Depends(store_money))
     now = datetime.now(timezone.utc)
     start = (now - timedelta(days=days)).replace(
         hour=0, minute=0, second=0, microsecond=0)
-    start_iso = start.isoformat()
+    start_iso = normalize_time(start.isoformat())
 
     try:
         live = c.provider.get_receipts(store_id, created_at_min=start_iso)
@@ -799,7 +805,7 @@ def reconcile_sales(store_id: str, days: int = 1, c: Ctx = Depends(store_money))
             raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
         raise
 
-    saved = c.store.list_sales(store_id, start_iso, now.isoformat())
+    saved = c.store.list_sales(store_id, start_iso, normalize_time(now.isoformat()))
     saved_by_number = {s.get("receipt_number"): s for s in saved}
 
     missing = []
@@ -842,13 +848,14 @@ def resync_sales(store_id: str, days: int = 7, c: Ctx = Depends(store_settings))
 
     try:
         processed = sync_and_deduct(c.provider, c.store, store_id,
-                                    created_at_min=start.isoformat())
+                                    created_at_min=normalize_time(start.isoformat()))
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
         raise
 
-    saved = c.store.list_sales(store_id, start.isoformat(), now.isoformat())
+    saved = c.store.list_sales(store_id, normalize_time(start.isoformat()),
+                               normalize_time(now.isoformat()))
     return {"days": days, "newly_processed": processed, "saved_total_count": len(saved)}
 
 
