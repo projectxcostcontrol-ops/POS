@@ -8,21 +8,29 @@ are ever typed in by a person.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone, timedelta
 
 from core.pos_provider import PosProvider
 from storage.firestore_store import Store
 
 # A newly connected branch never re-pulls its whole sales history - see
-# sync_branch() below. Every advance of the cursor keeps a few minutes of
-# overlap with the previous sync, guarding against a receipt whose
-# timestamp lands slightly behind when it was actually fetched (clock
-# skew between us and Loyverse, or a receipt written a moment late). The
-# cost of the overlap is re-checking a few already-processed receipts
-# next time, which is_receipt_processed skips cheaply; the alternative -
-# an exact boundary - can silently drop a receipt with no sign anything
-# went wrong.
-SYNC_OVERLAP_SECONDS = 300
+# sync_branch() below. Every advance of the cursor keeps an overlap with
+# the previous sync.
+#
+# This was 5 minutes and that was badly wrong. A restaurant running
+# several POS terminals has receipts that reach Loyverse long after the
+# sale: a till that dropped off wifi uploads its backlog when it
+# reconnects, and the receipt still carries the time it was rung up. With
+# a 5-minute overlap those receipts land behind a cursor that has already
+# moved past them, and nothing ever looks there again - they're lost
+# silently, with no error and no gap anyone can see.
+#
+# The two sides of this trade are not equal. Re-fetching a receipt costs
+# one skipped comparison (is_receipt_processed) and one idempotent
+# overwrite of the saved copy. Missing one loses a sale from the books
+# permanently. So the overlap is now hours, not minutes.
+SYNC_OVERLAP_SECONDS = int(os.environ.get("SYNC_OVERLAP_SECONDS", 6 * 3600))
 
 
 def sync_and_deduct(provider: PosProvider, store: Store, store_id: str,
@@ -49,6 +57,14 @@ def sync_and_deduct(provider: PosProvider, store: Store, store_id: str,
         if store.is_receipt_processed(store_id, number):
             continue
 
+        # A refund returns money, but the food was already cooked and the
+        # ingredients already gone. Adding stock back would invent
+        # inventory that isn't on the shelf. The money is corrected; the
+        # stock deliberately isn't.
+        if receipt.get("is_refund"):
+            store.mark_receipt_processed(store_id, number)
+            continue
+
         for line in receipt["line_items"]:
             recipe = store.get_recipe(store_id, line["item_name"])
             for ingredient in recipe:
@@ -72,7 +88,12 @@ def _save_sale(store: Store, store_id: str, receipt: dict):
         return
     store.save_sale(store_id, number, {
         "receipt_number": number,
+        # The sale time - what reports group by. A 7pm sale belongs to 7pm
+        # even if a delayed terminal only uploaded it at midnight.
         "date": receipt.get("created_at") or "",
+        # When Loyverse recorded it - what the cursor follows.
+        "recorded_at": receipt.get("recorded_at") or receipt.get("created_at") or "",
+        "is_refund": bool(receipt.get("is_refund")),
         "total": receipt.get("total") or 0,
         "items": [
             {

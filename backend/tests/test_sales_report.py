@@ -311,6 +311,71 @@ def test_a_recent_count_is_not_due():
     check("not due yet", out["count_due"], False)
 
 
+def test_a_refund_subtracts_instead_of_adding():
+    section("A refund lowers takings - it must never read as another sale")
+    # Loyverse reports refund money as a positive number. Counted as-is,
+    # refunding a 250 baht meal would ADD 250 to the day's takings. The
+    # sign is flipped when the receipt is read, so everything downstream
+    # just adds.
+    sales = [
+        {"date": "2026-08-24T10:00:00+00:00", "total": 250, "items": []},
+        {"date": "2026-08-24T12:00:00+00:00", "total": -250,
+         "is_refund": True, "items": []},
+    ]
+    out = sales_report.summarise(sales, {}, [])
+
+    check("the day nets to zero", out["total"], 0)
+    check("the refund isn't counted as a bill", out["bill_count"], 1)
+    check("but it is reported", out["refund_count"], 1)
+
+
+def test_refunds_do_not_return_stock():
+    section("A refunded dish doesn't put ingredients back on the shelf")
+    # The food was cooked and the ingredients are gone. Adding them back
+    # would invent inventory that isn't there - the money is corrected,
+    # the stock deliberately isn't.
+    store = make_test_store()
+    store.upsert_material("branch1", "m1", {"name": "กุ้ง", "unit": "kg", "cost": 300})
+    store.set_recipe("branch1", "ผัดไท", [{"material_id": "m1", "qty": 0.1}])
+
+    refund = receipt("1-1050", "2026-08-24T12:00:00+00:00", -250, [("ผัดไท", -2, 70)])
+    refund["is_refund"] = True
+
+    sync_and_deduct(FakeProvider([refund]), store, "branch1")
+
+    check("the refund is recorded as a sale row", len(store.list_sales("branch1")), 1)
+    check("no stock movement was written",
+          MovementLedger(store).list_movements("branch1"), [])
+
+
+def test_both_timestamps_are_kept():
+    section("Sale time and record time are stored separately")
+    # A till that was offline uploads its backlog hours later. The receipt
+    # carries the time it was rung up; Loyverse carries the time it
+    # arrived. Reports group by the first, the cursor follows the second -
+    # conflating them is how a delayed terminal's sales disappear.
+    store = make_test_store()
+    r = receipt("1-1001", "2026-08-24T19:00:00+00:00", 250, [("ผัดไท", 2, 70)])
+    r["recorded_at"] = "2026-08-25T02:00:00+00:00"   # uploaded after midnight
+
+    sync_and_deduct(FakeProvider([r]), store, "branch1")
+
+    saved = store.list_sales("branch1")[0]
+    check("reports use the sale time", saved["date"], "2026-08-24T19:00:00+00:00")
+    check("the cursor's timestamp is kept too",
+          saved["recorded_at"], "2026-08-25T02:00:00+00:00")
+
+
+def test_the_overlap_is_wide_enough_for_a_delayed_terminal():
+    section("The sync overlap is hours, not minutes")
+    # 5 minutes was the original value and it silently lost every receipt
+    # from a till that reconnected later. Re-fetching costs one skipped
+    # comparison; missing a sale loses it permanently, so the window errs
+    # heavily toward re-fetching.
+    from core.stock_engine import SYNC_OVERLAP_SECONDS
+    check("at least an hour of overlap", SYNC_OVERLAP_SECONDS >= 3600, True)
+
+
 def main():
     print("Running sales copy & reporting tests (offline)")
 
@@ -322,6 +387,10 @@ def main():
     test_backfill_runs_only_once()
     test_a_failing_backfill_does_not_block_the_first_sync()
     test_summary_totals_and_bill_count()
+    test_a_refund_subtracts_instead_of_adding()
+    test_refunds_do_not_return_stock()
+    test_both_timestamps_are_kept()
+    test_the_overlap_is_wide_enough_for_a_delayed_terminal()
     test_gross_profit_names_the_menus_it_could_not_cost()
     test_points_group_by_day_or_hour()
     test_top_items_rank_by_quantity()

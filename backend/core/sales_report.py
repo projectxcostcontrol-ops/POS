@@ -42,8 +42,14 @@ def summarise(sales: list[dict], recipes: dict, materials: list[dict],
     uncosted = set()
     buckets: dict[str, float] = {}
 
+    refunds = 0
     for sale in sales:
+        # Refund totals were already negated when the receipt was read, so
+        # they subtract here without any special case - a refunded sale
+        # lowers takings the way it lowers the till.
         total += sale.get("total") or 0
+        if sale.get("is_refund"):
+            refunds += 1
         key = _bucket_key(sale.get("date") or "", granularity)
         if key:
             buckets[key] = buckets.get(key, 0) + (sale.get("total") or 0)
@@ -63,7 +69,11 @@ def summarise(sales: list[dict], recipes: dict, materials: list[dict],
 
     return {
         "total": round(total, 2),
-        "bill_count": len(sales),
+        # Refunds aren't sales, so they don't inflate the bill count - but
+        # they're reported, because "12 bills" hiding 3 refunds behind it
+        # is a different day from 12 clean sales.
+        "bill_count": len(sales) - refunds,
+        "refund_count": refunds,
         "gross_profit": round(total - ingredient_cost, 2),
         "ingredient_cost": round(ingredient_cost, 2),
         # Named, not just counted: "3 menus weren't costed" leaves the

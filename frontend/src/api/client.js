@@ -153,6 +153,10 @@ export const api = {
     request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}`),
   getAlerts: (storeId) => request(`/api/${storeId}/alerts`),
+  reconcileSales: (storeId, days = 1) =>
+    request(`/api/${storeId}/sales/reconcile?days=${days}`),
+  resyncSales: (storeId, days = 7) =>
+    request(`/api/${storeId}/sales/resync?days=${days}`, { method: 'POST' }),
   backfillSales: (storeId) =>
     request(`/api/${storeId}/sales/backfill`, { method: 'POST' }),
 

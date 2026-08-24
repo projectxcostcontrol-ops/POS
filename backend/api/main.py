@@ -10,7 +10,7 @@ goes through a Store already scoped to that tenant. See api/deps.py.
 import asyncio
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 from fastapi import FastAPI, HTTPException, UploadFile, File, Response, Depends
@@ -772,6 +772,84 @@ def alerts(store_id: str, c: Ctx = Depends(store_ctx)):
         pending_drafts=len(c.store.list_drafts(store_id)),
         last_count_at=last_closed,
     )
+
+
+@app.get("/api/{store_id}/sales/reconcile")
+def reconcile_sales(store_id: str, days: int = 1, c: Ctx = Depends(store_money)):
+    """Compare what the POS reports against what we saved, for the last
+    N days.
+
+    Built after saved totals came in at a third of the real figure and it
+    took several rounds of guessing to find out why. A number that
+    disagrees with the POS is worse than no number, and the only way to
+    trust it again is to be able to check it on demand rather than reason
+    about it.
+
+    Reads the POS live, so it's limited by the plan's history window the
+    same way everything else is."""
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=days)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    start_iso = start.isoformat()
+
+    try:
+        live = c.provider.get_receipts(store_id, created_at_min=start_iso)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 402:
+            raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
+        raise
+
+    saved = c.store.list_sales(store_id, start_iso, now.isoformat())
+    saved_by_number = {s.get("receipt_number"): s for s in saved}
+
+    missing = []
+    for r in live:
+        num = r.get("receipt_number")
+        if num and num not in saved_by_number:
+            missing.append({
+                "receipt_number": num,
+                "sold_at": r.get("created_at"),
+                "recorded_at": r.get("recorded_at"),
+                "total": r.get("total"),
+                "is_refund": bool(r.get("is_refund")),
+            })
+
+    live_total = sum(r.get("total") or 0 for r in live)
+    saved_total = sum(s.get("total") or 0 for s in saved)
+
+    return {
+        "window_from": start_iso,
+        "pos": {"count": len(live), "total": round(live_total, 2)},
+        "saved": {"count": len(saved), "total": round(saved_total, 2)},
+        "missing_count": len(missing),
+        # The receipts themselves, so a gap can be traced to a terminal or
+        # a time of day instead of guessed at.
+        "missing": missing[:50],
+        "cursor": c.store.get_sync_cursor(store_id),
+    }
+
+
+@app.post("/api/{store_id}/sales/resync")
+def resync_sales(store_id: str, days: int = 7, c: Ctx = Depends(store_settings)):
+    """Re-pull and re-save the last N days, ignoring the cursor.
+
+    The repair for receipts the cursor already skipped past. Saving is
+    keyed by receipt number, so this overwrites rather than duplicating,
+    and stock is untouched for anything already processed."""
+    now = datetime.now(timezone.utc)
+    start = (now - timedelta(days=days)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        processed = sync_and_deduct(c.provider, c.store, store_id,
+                                    created_at_min=start.isoformat())
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 402:
+            raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
+        raise
+
+    saved = c.store.list_sales(store_id, start.isoformat(), now.isoformat())
+    return {"days": days, "newly_processed": processed, "saved_total_count": len(saved)}
 
 
 @app.post("/api/{store_id}/sales/backfill")
