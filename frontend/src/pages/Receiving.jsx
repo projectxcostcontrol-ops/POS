@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { compressImage } from '../utils/imageCompress';
+import MaterialPicker from '../components/MaterialPicker';
 
 export default function Receiving() {
   const { storeId } = useStore();
@@ -61,11 +62,11 @@ export default function Receiving() {
           width: '100%', padding: 15, fontSize: 15, fontWeight: 600,
           borderRadius: 12, background: 'var(--accent)', color: '#fff',
         }}>
-        {scanning ? 'กำลังอ่าน...' : '📷 ถ่ายใบส่งของ ให้ AI อ่านให้'}
+        {scanning ? 'กำลังอ่าน...' : '📷 บันทึกด้วยรูปถ่าย'}
       </button>
       <button onClick={() => setShowForm(true)}
         style={{ width: '100%', padding: 12, marginTop: 8, fontSize: 13 }}>
-        ✏️ กรอกเอง
+        ✏️ บันทึกใบส่งของ
       </button>
       <div style={{ height: 16 }} />
       {scanError && <p style={{ fontSize: 12, color: 'var(--text-danger)', marginBottom: 12 }}>{scanError}</p>}
@@ -114,7 +115,8 @@ export default function Receiving() {
       </div>
 
       {showForm && (
-        <ReceivingForm materials={materials} onCancel={() => setShowForm(false)}
+        <ReceivingForm materials={materials} onMaterialsChanged={load}
+          onCancel={() => setShowForm(false)}
           onSaved={() => { setShowForm(false); load(); }} storeId={storeId} />
       )}
 
@@ -365,10 +367,14 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
                   <span style={{ fontSize: 12, color: 'var(--text-success)' }}>
                     ✓ จับคู่: {it.match.material_name}
                   </span>
-                  <select value={it.match.material_id} onChange={(e) => pickMaterial(idx, e.target.value)}
-                    style={{ fontSize: 11, marginLeft: 'auto' }}>
-                    {localMaterials.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
+                  {/* Searchable, because a matched row often needs
+                      correcting and scrolling a long list to do it is
+                      how a wrong match gets left alone. */}
+                  <div style={{ marginLeft: 'auto', width: 150 }}>
+                    <MaterialPicker materials={localMaterials} value={it.match.material_id}
+                      storeId={storeId} onChange={(id) => pickMaterial(idx, id)}
+                      onCreated={async () => setLocalMaterials(await api.getMaterials(storeId))} />
+                  </div>
                 </div>
               ) : creatingFor === idx ? (
                 <QuickCreateMaterial
@@ -474,7 +480,7 @@ function QuickCreateMaterial({ storeId, defaultName, defaultUnit, onCancel, onCr
   );
 }
 
-function ReceivingForm({ materials, onCancel, onSaved, storeId }) {
+function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChanged }) {
   const [supplier, setSupplier] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [rows, setRows] = useState([]);
@@ -482,8 +488,10 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId }) {
   const [error, setError] = useState('');
 
   function addRow() {
-    if (materials.length === 0) return;
-    setRows([...rows, { material_id: materials[0].id, quantity: 0, unit_cost: 0 }]);
+    // Deliberately blank rather than defaulting to the first material:
+    // a pre-filled pick that nobody chose is indistinguishable from one
+    // they did, and it lands in stock either way.
+    setRows([...rows, { material_id: '', quantity: 0, unit_cost: 0 }]);
   }
   function updateRow(idx, patch) {
     setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
@@ -496,9 +504,16 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId }) {
   const unitOf = (id) => materials.find((m) => m.id === id)?.unit || '';
 
   async function save() {
-    const valid = rows.filter((r) => r.quantity > 0);
+    const valid = rows.filter((r) => r.material_id && r.quantity > 0);
     if (valid.length === 0) {
-      setError('ใส่รายการอย่างน้อย 1 รายการ พร้อมจำนวนที่มากกว่า 0');
+      setError('ใส่รายการอย่างน้อย 1 รายการ เลือกวัตถุดิบและใส่จำนวนมากกว่า 0');
+      return;
+    }
+    // Rows that are half-filled would otherwise be dropped without a word,
+    // and the saved total wouldn't match the delivery note in hand.
+    const incomplete = rows.length - valid.length;
+    if (incomplete > 0) {
+      setError(`มี ${incomplete} รายการที่ยังไม่ครบ (ต้องเลือกวัตถุดิบและใส่จำนวน) - ลบออกหรือกรอกให้ครบก่อน`);
       return;
     }
     setSaving(true);
@@ -517,7 +532,7 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId }) {
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-box" style={{ width: 380, maxHeight: '80vh', overflowY: 'auto' }}
         onClick={(e) => e.stopPropagation()}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกใบรับของ</p>
+        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกใบส่งของ</p>
 
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ผู้ขาย / ซัพพลายเออร์</label>
         <input value={supplier} onChange={(e) => setSupplier(e.target.value)}
@@ -535,10 +550,9 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId }) {
         )}
         {rows.map((r, idx) => (
           <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
-            <select value={r.material_id} onChange={(e) => updateRow(idx, { material_id: e.target.value })}
-              style={{ flex: 1.2, fontSize: 12 }}>
-              {materials.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+            <MaterialPicker materials={materials} value={r.material_id} storeId={storeId}
+              onChange={(id) => updateRow(idx, { material_id: id })}
+              onCreated={onMaterialsChanged} />
             <input type="number" value={r.quantity} placeholder="จำนวน"
               onChange={(e) => updateRow(idx, { quantity: parseFloat(e.target.value) || 0 })}
               style={{ width: 60, fontSize: 12 }} />
