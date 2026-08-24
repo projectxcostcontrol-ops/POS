@@ -155,10 +155,8 @@ export const api = {
   getAlerts: (storeId) => request(`/api/${storeId}/alerts`),
   reconcileSales: (storeId, days = 1) =>
     request(`/api/${storeId}/sales/reconcile?days=${days}`),
-  resyncSales: (storeId, days = 7) =>
-    request(`/api/${storeId}/sales/resync?days=${days}`, { method: 'POST' }),
-  backfillSales: (storeId) =>
-    request(`/api/${storeId}/sales/backfill`, { method: 'POST' }),
+  repairSales: (storeId) =>
+    request(`/api/${storeId}/sales/repair`, { method: 'POST' }),
 
   // ---- stock counts & variance (3.4) ----
   listCounts: (storeId) => request(`/api/${storeId}/counts`),

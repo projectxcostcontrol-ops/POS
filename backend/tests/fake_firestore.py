@@ -79,6 +79,22 @@ class FakeCollection:
         return [FakeDoc(i, d) for i, d in self._docs().items()]
 
 
+class FakeBatch:
+    """Batched writes, mirroring Firestore's real batch API so the code
+    under test takes the same path it takes in production."""
+
+    def __init__(self):
+        self._ops = []
+
+    def set(self, doc_ref, data, merge=False):
+        self._ops.append((doc_ref, data, merge))
+
+    def commit(self):
+        for doc_ref, data, merge in self._ops:
+            doc_ref.set(data, merge=merge)
+        self._ops = []
+
+
 class FakeDb:
     """Mimics db.collection(...).document(...).collection(...) chaining,
     to arbitrary depth."""
@@ -88,6 +104,9 @@ class FakeDb:
 
     def collection(self, name):
         return FakeCollection(self.storage, name)
+
+    def batch(self):
+        return FakeBatch()
 
 
 def make_test_store(tenant_id: str = "t1", db=None):

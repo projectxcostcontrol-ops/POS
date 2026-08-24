@@ -61,9 +61,9 @@ def test_a_brand_new_branch_deducts_nothing_and_starts_its_cursor():
         {"receipt_number": "1", "created_at": "2026-08-01T10:00:00+00:00",
          "total": 100, "line_items": []}])
 
-    processed = sync_branch(provider, store, "branch1")
+    result = sync_branch(provider, store, "branch1")
 
-    check("nothing processed for stock", processed, 0)
+    check("nothing deducted from stock", result["deducted"], 0)
     check("history was saved for reporting", len(store.list_sales("branch1")), 1)
     check("a cursor now exists", store.get_sync_cursor("branch1") is not None, True)
 
@@ -124,21 +124,25 @@ def test_cursor_has_overlap_not_an_exact_boundary():
 
     check("overlap is a positive amount of time", SYNC_OVERLAP_SECONDS > 0, True)
 
-    # Back-date the cursor so the next sync's now-minus-overlap genuinely
-    # lands ahead of it. Two syncs fired in the same instant (as above)
-    # correctly leave the cursor untouched - that's the monotonic clamp,
-    # not the overlap - so the overlap only becomes observable once real
-    # time has passed between syncs.
+    # The cursor follows the newest arrival time actually seen, not the
+    # wall clock - recorded_at is a fact about the data, where "now minus
+    # a guess" is an assumption about how late receipts might be.
     store.set_sync_cursor("branch1", "2026-01-01T00:00:00.000Z")
-    sync_branch(provider, store, "branch1")
-    cursor = store.get_sync_cursor("branch1")
+    dated = FakeProvider(receipts=[{
+        "receipt_number": "9", "created_at": "2026-08-20T10:00:00.000Z",
+        "recorded_at": "2026-08-20T11:30:00.000Z", "total": 100, "line_items": [],
+    }])
+    sync_branch(dated, store, "branch1")
 
-    # Compared as real timestamps, not strings: the two values can be in
-    # different textual formats (a cursor written by an older version, say)
-    # while still being perfectly comparable moments in time.
-    gap = (_parse_time(_utcnow_iso()) - _parse_time(cursor)).total_seconds()
-    check("cursor sits roughly one overlap window behind now",
-          SYNC_OVERLAP_SECONDS - 5 <= gap <= SYNC_OVERLAP_SECONDS + 5, True)
+    check("cursor moved to the newest arrival time seen",
+          store.get_sync_cursor("branch1"), "2026-08-20T11:30:00.000Z")
+
+    # And the request that goes out next is rewound by the overlap.
+    sync_branch(dated, store, "branch1")
+    gap = (_parse_time("2026-08-20T11:30:00.000Z")
+           - _parse_time(dated.calls[-1])).total_seconds()
+    check("the next request reaches back one overlap window",
+          abs(gap - SYNC_OVERLAP_SECONDS) < 5, True)
 
 
 def test_branches_have_independent_cursors():
@@ -228,7 +232,12 @@ def test_a_legacy_cursor_in_storage_is_converted_before_being_sent():
     sent = provider.calls[0]
     check("the value SENT to Loyverse is in Loyverse's format",
           bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", sent)), True)
-    check("and it's the same moment, not a reset", sent, "2026-08-23T16:55:43.953Z")
+    # Rewound by the overlap window rather than used as-is, so receipts
+    # that arrived late still get picked up.
+    check("it reaches back before the stored cursor",
+          sent < "2026-08-23T16:55:43.953Z", True)
+    check("and it's anchored on that cursor, not a reset",
+          sent.startswith("2026-08-23"), True)
     check("the stored cursor is rewritten in the new format too",
           bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z",
                             store.get_sync_cursor("branch1"))), True)

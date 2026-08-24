@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.fake_firestore import make_test_store
-from core.stock_engine import sync_and_deduct, sync_branch, backfill_sales
+from core.stock_engine import sync_branch
 from storage.movement_ledger import MovementLedger
 from core import sales_report
 
@@ -71,7 +71,7 @@ def test_sales_are_saved_as_receipts_sync():
         receipt("1-1002", "2026-08-24T11:00:00+00:00", 180, [("ข้าวผัด", 1, 60)]),
     ])
 
-    sync_and_deduct(provider, store, "branch1")
+    sync_branch(provider, store, "branch1")
 
     saved = store.list_sales("branch1")
     check("both receipts saved", len(saved), 2)
@@ -89,8 +89,8 @@ def test_resyncing_the_same_receipt_does_not_double_count():
         receipt("1-1001", "2026-08-24T10:00:00+00:00", 250, [("ผัดไท", 2, 70)]),
     ])
 
-    sync_and_deduct(provider, store, "branch1")
-    sync_and_deduct(provider, store, "branch1")
+    sync_branch(provider, store, "branch1")
+    sync_branch(provider, store, "branch1")
 
     saved = store.list_sales("branch1")
     check("still one record", len(saved), 1)
@@ -106,7 +106,8 @@ def test_an_already_processed_receipt_is_still_saved():
     r = receipt("1-1001", "2026-08-24T10:00:00+00:00", 250, [("ผัดไท", 2, 70)])
     store.mark_receipt_processed("branch1", "1-1001")
 
-    sync_and_deduct(FakeProvider([r]), store, "branch1")
+    store.set_sync_cursor("branch1", "2026-01-01T00:00:00.000Z")
+    sync_branch(FakeProvider([r]), store, "branch1")
 
     check("the sale was recorded anyway", len(store.list_sales("branch1")), 1)
 
@@ -120,17 +121,21 @@ def test_stock_is_not_deducted_twice_for_the_same_receipt():
         receipt("1-1001", "2026-08-24T10:00:00+00:00", 250, [("ผัดไท", 2, 70)]),
     ])
 
-    first = sync_and_deduct(provider, store, "branch1")
-    second = sync_and_deduct(provider, store, "branch1")
+    # A cursor means this is not a first run, so stock is deducted.
+    store.set_sync_cursor("branch1", "2026-01-01T00:00:00.000Z")
+    first = sync_branch(provider, store, "branch1")
+    second = sync_branch(provider, store, "branch1")
 
-    check("processed once", first, 1)
-    check("second pass processes nothing", second, 0)
+    check("deducted once", first["deducted"], 1)
+    check("second pass deducts nothing", second["deducted"], 0)
+    check("but the receipt is still saved again", second["saved"], 1)
+    check("and reported as already counted", second["already_counted"], 1)
 
 
 # ---------- backfill ----------
 
-def test_backfill_saves_history_without_deducting_stock():
-    section("Backfilled sales are recorded but never deduct stock")
+def test_first_run_saves_history_without_deducting_stock():
+    section("A first sync records history but never deducts stock")
     # Those sales happened before the branch had recipes. Deducting them
     # now would drive stock negative against ingredients nobody was
     # tracking at the time - a made-up shortage on day one.
@@ -142,44 +147,48 @@ def test_backfill_saves_history_without_deducting_stock():
         receipt("1-0900", "2026-07-30T10:00:00+00:00", 250, [("ผัดไท", 2, 70)]),
     ])
 
-    saved = backfill_sales(provider, store, "branch1")
+    result = sync_branch(provider, store, "branch1")
 
-    check("history saved", saved, 1)
+    check("marked as a first run", result["first_run"], True)
+    check("history saved", result["saved"], 1)
     check("the sale is queryable", len(store.list_sales("branch1")), 1)
     check("no stock movement was written",
           MovementLedger(store).list_movements("branch1"), [])
 
 
-def test_backfill_runs_only_once():
-    section("Backfill doesn't repeat on every sync")
+def test_the_full_history_pull_happens_only_once():
+    section("Only the first sync asks for everything")
+    # Afterwards the cursor narrows the request. Asking for full history
+    # every five minutes is what made the original sync hang.
     store = make_test_store()
     provider = FakeProvider([
         receipt("1-0900", "2026-07-30T10:00:00+00:00", 250, [("ผัดไท", 2, 70)]),
     ])
 
-    backfill_sales(provider, store, "branch1")
-    again = backfill_sales(provider, store, "branch1")
+    first = sync_branch(provider, store, "branch1")
+    second = sync_branch(provider, store, "branch1")
 
-    check("second call does nothing", again, 0)
-    check("marked as done", store.has_backfilled_sales("branch1"), True)
+    check("first run asked for everything", provider.calls[0], None)
+    check("first run flagged as such", first["first_run"], True)
+    check("second run is bounded by the cursor", provider.calls[1] is not None, True)
+    check("and is not a first run", second["first_run"], False)
 
 
-def test_a_failing_backfill_does_not_block_the_first_sync():
-    section("If history can't be fetched, the branch still starts syncing")
-    # A 402 or a network blip on backfill must not leave the branch
-    # without a cursor - it would retry the same failing fetch forever and
-    # never sync anything new.
-    class Boom:
-        def get_receipts(self, store_id, created_at_min=None):
-            if created_at_min is None:
-                raise RuntimeError("history unavailable")
-            return []
-
+def test_a_repair_run_can_be_forced_on_an_established_branch():
+    section("full=True re-reads everything, even with a cursor already set")
+    # The repair for a branch whose history has gaps - which is how a
+    # branch that connected before saving existed gets its past back.
     store = make_test_store()
-    sync_branch(Boom(), store, "branch1")
+    store.set_sync_cursor("branch1", "2026-08-20T00:00:00.000Z")
+    provider = FakeProvider([
+        receipt("1-0900", "2026-07-30T10:00:00+00:00", 250, [("ผัดไท", 2, 70)]),
+    ])
 
-    check("a cursor was still established",
-          store.get_sync_cursor("branch1") is not None, True)
+    result = sync_branch(provider, store, "branch1", full=True)
+
+    check("asked for everything despite the cursor", provider.calls[0], None)
+    check("treated as a first run", result["first_run"], True)
+    check("history saved", result["saved"], 1)
 
 
 # ---------- reporting ----------
@@ -345,7 +354,8 @@ def test_refunds_do_not_return_stock():
     refund = receipt("1-1050", "2026-08-24T12:00:00+00:00", -250, [("ผัดไท", -2, 70)])
     refund["is_refund"] = True
 
-    sync_and_deduct(FakeProvider([refund]), store, "branch1")
+    store.set_sync_cursor("branch1", "2026-01-01T00:00:00.000Z")
+    sync_branch(FakeProvider([refund]), store, "branch1")
 
     check("the refund is recorded as a sale row", len(store.list_sales("branch1")), 1)
     check("no stock movement was written",
@@ -362,7 +372,8 @@ def test_both_timestamps_are_kept():
     r = receipt("1-1001", "2026-08-24T19:00:00+00:00", 250, [("ผัดไท", 2, 70)])
     r["recorded_at"] = "2026-08-25T02:00:00+00:00"   # uploaded after midnight
 
-    sync_and_deduct(FakeProvider([r]), store, "branch1")
+    store.set_sync_cursor("branch1", "2026-01-01T00:00:00.000Z")
+    sync_branch(FakeProvider([r]), store, "branch1")
 
     saved = store.list_sales("branch1")[0]
     check("reports use the sale time", saved["date"], "2026-08-24T19:00:00+00:00")
@@ -387,9 +398,9 @@ def main():
     test_resyncing_the_same_receipt_does_not_double_count()
     test_an_already_processed_receipt_is_still_saved()
     test_stock_is_not_deducted_twice_for_the_same_receipt()
-    test_backfill_saves_history_without_deducting_stock()
-    test_backfill_runs_only_once()
-    test_a_failing_backfill_does_not_block_the_first_sync()
+    test_first_run_saves_history_without_deducting_stock()
+    test_the_full_history_pull_happens_only_once()
+    test_a_repair_run_can_be_forced_on_an_established_branch()
     test_summary_totals_and_bill_count()
     test_a_refund_subtracts_instead_of_adding()
     test_refunds_do_not_return_stock()

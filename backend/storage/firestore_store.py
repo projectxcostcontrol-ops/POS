@@ -452,6 +452,41 @@ class Store:
     def save_sale(self, store_id: str, receipt_number: str, data: dict):
         self._col(store_id, "sales").document(receipt_number).set(data)
 
+    def save_sales_bulk(self, store_id: str, rows: list[tuple[str, dict]]):
+        """Write many sales in batched round trips.
+
+        One write per receipt is fine for a five-minute sync of a dozen
+        bills and hopeless for a first sync of several thousand - the
+        request simply times out, which is what "ดึงซ้ำแล้วค้าง" was.
+        Firestore takes 500 writes per batch, so this turns thousands of
+        round trips into a handful."""
+        col = self._col(store_id, "sales")
+        CHUNK = 400   # under Firestore's 500 limit, with headroom
+        for i in range(0, len(rows), CHUNK):
+            batch = self.db.batch()
+            for number, data in rows[i:i + CHUNK]:
+                batch.set(col.document(number), data)
+            batch.commit()
+
+    def mark_receipts_processed_bulk(self, store_id: str, numbers: list[str]):
+        """Same reasoning as save_sales_bulk - one write each is what made
+        a large sync unusable."""
+        col = self._col(store_id, "processed_receipts")
+        CHUNK = 400
+        for i in range(0, len(numbers), CHUNK):
+            batch = self.db.batch()
+            for number in numbers[i:i + CHUNK]:
+                batch.set(col.document(number), {"processed": True})
+            batch.commit()
+
+    def list_processed_receipts(self, store_id: str) -> set[str]:
+        """All processed receipt numbers at once.
+
+        Checking them one at a time meant a read per receipt; a sync of
+        500 bills spent 500 round trips just asking "have I seen this
+        one". One read answers it for all of them."""
+        return {d.id for d in self._col(store_id, "processed_receipts").stream()}
+
     def list_sales(self, store_id: str, start: str | None = None,
                    end: str | None = None) -> list[dict]:
         """Sales in a date window, oldest first. Dates are ISO strings and

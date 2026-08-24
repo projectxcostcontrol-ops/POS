@@ -21,7 +21,7 @@ from adapters.loyverse_adapter import LoyverseAdapter
 from adapters._loyverse_client import normalize_time
 from storage.firestore_store import Store
 from storage.movement_ledger import MovementLedger
-from core.stock_engine import sync_and_deduct, sync_branch, backfill_sales
+from core.stock_engine import sync_branch
 from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
@@ -835,54 +835,35 @@ def reconcile_sales(store_id: str, days: int = 1, c: Ctx = Depends(store_money))
     }
 
 
-@app.post("/api/{store_id}/sales/resync")
-def resync_sales(store_id: str, days: int = 7, c: Ctx = Depends(store_settings)):
-    """Re-pull and re-save the last N days, ignoring the cursor.
+@app.post("/api/{store_id}/sales/repair")
+def repair_sales(store_id: str, c: Ctx = Depends(store_settings)):
+    """Re-read everything the POS still has and re-save it.
 
-    The repair for receipts the cursor already skipped past. Saving is
-    keyed by receipt number, so this overwrites rather than duplicating,
-    and stock is untouched for anything already processed."""
-    now = datetime.now(timezone.utc)
-    start = (now - timedelta(days=days)).replace(
-        hour=0, minute=0, second=0, microsecond=0)
-
+    Replaces the old backfill/resync pair. Both existed to patch the same
+    hole from different angles, and a branch could miss both - which is
+    exactly what left a month of history unsaved while today's figures
+    looked fine."""
     try:
-        processed = sync_and_deduct(c.provider, c.store, store_id,
-                                    created_at_min=normalize_time(start.isoformat()))
+        result = sync_branch(c.provider, c.store, store_id, full=True)
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
         raise
-
-    saved = c.store.list_sales(store_id, normalize_time(start.isoformat()),
-                               normalize_time(now.isoformat()))
-    return {"days": days, "newly_processed": processed, "saved_total_count": len(saved)}
+    return result
 
 
-@app.post("/api/{store_id}/sales/backfill")
-def run_backfill(store_id: str, c: Ctx = Depends(store_settings)):
-    """Manually pull whatever history the POS plan still allows. Normally
-    happens automatically on first sync; this is here for a branch that
-    connected before saving was added."""
-    try:
-        saved = backfill_sales(c.provider, c.store, store_id)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 402:
-            raise HTTPException(
-                402, "แพ็กเกจ Loyverse ที่ใช้อยู่ดึงย้อนหลังได้ไม่เกิน 30 วัน")
-        raise
-    return {"saved": saved}
-
-
-# ---- stock counts and variance (step 3.4) ------------------------------
-
-DEFAULT_VARIANCE_PCT = 10.0
-DEFAULT_VARIANCE_VALUE = 200.0
-
-
-def _thresholds(c: Ctx) -> tuple[float, float]:
-    return (float(c.store.get_setting("variance_threshold_pct") or DEFAULT_VARIANCE_PCT),
-            float(c.store.get_setting("variance_threshold_value") or DEFAULT_VARIANCE_VALUE))
+@app.get("/api/{store_id}/alerts")
+def alerts(store_id: str, c: Ctx = Depends(store_ctx)):
+    """Deliberately NOT gated on view_money - staff need to know stock is
+    running out, and none of this exposes takings."""
+    sessions = c.store.list_count_sessions(store_id)
+    last_closed = next((s.get("closed_at") for s in sessions
+                        if s.get("status") == "closed"), None)
+    return sales_report.build_alerts(
+        materials=c.store.list_materials(store_id),
+        pending_drafts=len(c.store.list_drafts(store_id)),
+        last_count_at=last_closed,
+    )
 
 
 @app.get("/api/{store_id}/counts")
@@ -1072,21 +1053,23 @@ def list_receipts(store_id: str, created_at_min: str | None = None,
 
 
 @app.post("/api/{store_id}/sync")
-def sync(store_id: str, c: Ctx = Depends(store_ctx)):
-    """Uses the saved cursor like the background loop does - see
-    Store.get_sync_cursor. The first press for a newly connected branch
-    establishes the cursor and reports 0 processed; that's correct, not
-    broken - press again (or just wait for the next auto sync) to pull
-    whatever's sold since."""
+def sync(store_id: str, full: bool = False, c: Ctx = Depends(store_ctx)):
+    """Pull new sales now instead of waiting for the next cycle.
+
+    `full=true` re-reads everything the POS will give and re-saves it -
+    the repair for a branch whose history has gaps. It's safe to run any
+    time: saving is keyed by receipt number so it overwrites rather than
+    duplicating, and stock is never deducted twice."""
     try:
-        count = sync_branch(c.provider, c.store, store_id)
+        result = sync_branch(c.provider, c.store, store_id, full=full)
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(
-                402, "แพ็กเกจ Loyverse ที่ใช้อยู่ดูประวัติการขายย้อนหลังได้ไม่เกิน 31 วัน "
-                     "- กด \"รีเซ็ตจุดซิงก์\" เพื่อเริ่มนับใหม่จากตอนนี้")
+                402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
         raise
-    return {"processed_receipts": count}
+    # processed_receipts kept for the existing UI copy; the rest is new
+    # detail that makes "0" readable.
+    return {"processed_receipts": result["deducted"], **result}
 
 
 @app.post("/api/{store_id}/sync/reset-cursor")

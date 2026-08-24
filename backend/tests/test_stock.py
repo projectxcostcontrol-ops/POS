@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.fake_firestore import make_test_store
 from storage.movement_ledger import MovementLedger
-from core.stock_engine import sync_and_deduct
+from core.stock_engine import sync_branch
 
 STORE_ID = "test-store"
 
@@ -215,15 +215,18 @@ def test_sales_deduct_via_recipe():
         "line_items": [{"item_name": "ต้มยำกุ้ง", "quantity": 2, "price": 90}],
     }])
 
-    processed = sync_and_deduct(provider, store, STORE_ID)
-    check("one receipt processed", processed, 1)
+    # A cursor marks this branch as established, so stock is deducted -
+    # a first sync deliberately only records history.
+    store.set_sync_cursor(STORE_ID, "2026-01-01T00:00:00.000Z")
+    result = sync_branch(provider, store, STORE_ID)
+    check("one receipt deducted", result["deducted"], 1)
 
     material = store.list_materials(STORE_ID)[0]
     check("2 dishes used 300g", material["stock"], 700)
 
     # syncing again must not deduct the same receipt twice
-    processed_again = sync_and_deduct(provider, store, STORE_ID)
-    check("re-sync skips processed receipts", processed_again, 0)
+    again = sync_branch(provider, store, STORE_ID)
+    check("re-sync deducts nothing", again["deducted"], 0)
     check("stock unchanged after re-sync", store.list_materials(STORE_ID)[0]["stock"], 700)
 
 
@@ -240,8 +243,9 @@ def test_recipe_without_material_is_harmless():
         "line_items": [{"item_name": "เมนูผี", "quantity": 1, "price": 50}],
     }])
 
-    processed = sync_and_deduct(provider, store, STORE_ID)
-    check("sync completed anyway", processed, 1)
+    store.set_sync_cursor(STORE_ID, "2026-01-01T00:00:00.000Z")
+    result = sync_branch(provider, store, STORE_ID)
+    check("sync completed anyway", result["deducted"], 1)
 
 
 def main():
