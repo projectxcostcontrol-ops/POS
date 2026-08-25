@@ -286,7 +286,7 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-box" style={{ width: 420, maxHeight: '85vh', overflowY: 'auto' }}
+      <div className="modal-box" style={{ width: 500, maxWidth: '92vw', maxHeight: '85vh', overflowY: 'auto' }}
         onClick={(e) => e.stopPropagation()}>
         <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>ตรวจสอบใบรับของ (จาก AI)</p>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 16px' }}>
@@ -334,6 +334,13 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
           </div>
         )}
 
+        <div className="receiving-items-grid receiving-items-header">
+          <span>รายการ</span>
+          <span>จำนวน</span>
+          <span>ราคาต่อหน่วย</span>
+          <span aria-hidden="true" />
+        </div>
+
         {items.map((it, idx) => {
           const conf = it.confidence;
           const lowConf = typeof conf === 'number' && conf < 0.7;
@@ -344,20 +351,32 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
               padding: '10px 0', borderBottom: idx < items.length - 1 ? '0.5px solid var(--border)' : 'none',
               background: lowConf ? '#fffbf0' : undefined,
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontSize: 13 }}>
+              <div className="receiving-items-grid" style={{ alignItems: 'center', marginBottom: 4 }}>
+                <span style={{ fontSize: 12.5, minWidth: 0 }}>
                   {it.name}
-                  {lowConf && <span style={{ color: 'var(--text-warning)' }}> ⚠ {Math.round(conf * 100)}%</span>}
+                  {lowConf && (
+                    <span style={{ color: 'var(--text-warning)', display: 'block', fontSize: 10.5 }}>
+                      AI มั่นใจ {Math.round(conf * 100)}%
+                    </span>
+                  )}
                 </span>
-                <button onClick={() => removeItem(idx)} style={{ fontSize: 11, padding: '2px 6px' }}>ลบ</button>
-              </div>
-
-              <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
-                <input type="number" value={it.qty} onChange={(e) => updateItem(idx, { qty: parseFloat(e.target.value) || 0 })}
-                  style={{ width: 60, fontSize: 12 }} placeholder="จำนวน" />
-                <span style={{ fontSize: 11, color: 'var(--text-secondary)', alignSelf: 'center' }}>{it.unit}</span>
+                <div style={{ position: 'relative', minWidth: 0 }}>
+                  <input type="number" value={it.qty}
+                    onChange={(e) => updateItem(idx, { qty: parseFloat(e.target.value) || 0 })}
+                    style={{ width: '100%', fontSize: 12, paddingRight: it.unit ? 32 : 8 }} placeholder="0" />
+                  {it.unit && (
+                    <span style={{
+                      position: 'absolute', right: 7, top: '50%', transform: 'translateY(-50%)',
+                      fontSize: 9.5, color: 'var(--text-muted)', pointerEvents: 'none',
+                    }}>
+                      {it.unit}
+                    </span>
+                  )}
+                </div>
                 <input type="number" value={it.price ?? ''} onChange={(e) => updateItem(idx, { price: e.target.value === '' ? null : parseFloat(e.target.value) || 0, price_source: 'edited' })}
-                  style={{ width: 80, fontSize: 12 }} placeholder="ราคา/หน่วย" />
+                  style={{ width: '100%', minWidth: 0, fontSize: 12 }} placeholder="0.00" />
+                <button onClick={() => removeItem(idx)} aria-label={`ลบรายการที่ ${idx + 1}`}
+                  style={{ fontSize: 14, padding: '4px 5px', color: 'var(--text-muted)' }}>×</button>
               </div>
               {priceNote(it)}
               {unitNote(it)}
@@ -530,7 +549,7 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChang
 
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-box" style={{ width: 380, maxHeight: '80vh', overflowY: 'auto' }}
+      <div className="modal-box" style={{ width: 460, maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto' }}
         onClick={(e) => e.stopPropagation()}>
         <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกใบส่งของ</p>
 
@@ -542,27 +561,40 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChang
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
           style={{ width: '100%', margin: '4px 0 12px' }} />
 
-        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>รายการ</label>
+        <div className="receiving-items-grid receiving-items-header">
+          <span>รายการ</span>
+          <span>จำนวน</span>
+          <span>ราคาต่อหน่วย</span>
+          <span aria-hidden="true" />
+        </div>
         {rows.length === 0 && (
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '8px 0 4px' }}>
             ยังไม่มีรายการ กด "เพิ่มรายการ" ด้านล่าง
           </p>
         )}
         {rows.map((r, idx) => (
-          <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 8 }}>
+          <div key={idx} className="receiving-items-grid" style={{ alignItems: 'center', marginBottom: 8 }}>
             <MaterialPicker materials={materials} value={r.material_id} storeId={storeId}
               onChange={(id) => updateRow(idx, { material_id: id })}
               onCreated={onMaterialsChanged} />
-            <input type="number" value={r.quantity} placeholder="จำนวน"
-              onChange={(e) => updateRow(idx, { quantity: parseFloat(e.target.value) || 0 })}
-              style={{ width: 60, fontSize: 12 }} />
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)', minWidth: 28 }}>
-              {unitOf(r.material_id)}
-            </span>
-            <input type="number" value={r.unit_cost} placeholder="ราคา/หน่วย"
+            <div style={{ position: 'relative', minWidth: 0 }}>
+              <input type="number" value={r.quantity} placeholder="0"
+                onChange={(e) => updateRow(idx, { quantity: parseFloat(e.target.value) || 0 })}
+                style={{ width: '100%', fontSize: 12, paddingRight: unitOf(r.material_id) ? 32 : 8 }} />
+              {unitOf(r.material_id) && (
+                <span style={{
+                  position: 'absolute', right: 7, top: '50%', transform: 'translateY(-50%)',
+                  fontSize: 9.5, color: 'var(--text-muted)', pointerEvents: 'none',
+                }}>
+                  {unitOf(r.material_id)}
+                </span>
+              )}
+            </div>
+            <input type="number" value={r.unit_cost} placeholder="0.00"
               onChange={(e) => updateRow(idx, { unit_cost: parseFloat(e.target.value) || 0 })}
-              style={{ width: 70, fontSize: 12 }} />
-            <button onClick={() => removeRow(idx)} style={{ padding: '4px 6px' }}>x</button>
+              style={{ width: '100%', minWidth: 0, fontSize: 12 }} />
+            <button onClick={() => removeRow(idx)} aria-label={`ลบรายการที่ ${idx + 1}`}
+              style={{ padding: '4px 5px', color: 'var(--text-muted)' }}>×</button>
           </div>
         ))}
         <button onClick={addRow} style={{ width: '100%', marginTop: 4 }}>+ เพิ่มรายการ</button>
