@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { MORE_GROUPS } from '../nav';
+import { SignOut } from '@phosphor-icons/react';
 
 /**
  * Everything that isn't daily work, grouped by how often it's actually
@@ -14,7 +15,7 @@ import { MORE_GROUPS } from '../nav';
  * fields come out of nav.js and this renders without them.
  */
 export default function More() {
-  const { can } = useAuth();
+  const { can, profile, signOut } = useAuth();
 
   return (
     <div className="tab-more">
@@ -44,6 +45,17 @@ export default function More() {
           </div>
         );
       })}
+
+      <div className="mobile-account">
+        <div className="mobile-account-copy">
+          <span>บัญชีที่ใช้งาน</span>
+          <strong>{profile?.email}</strong>
+        </div>
+        <button type="button" className="mobile-signout" onClick={signOut}>
+          <SignOut size={19} />
+          ออกจากระบบ
+        </button>
+      </div>
     </div>
   );
 }

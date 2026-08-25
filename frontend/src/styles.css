@@ -98,6 +98,7 @@ main.content > div > div:first-child:not(.page-header) > p:first-child {
 .tab-more .label { font-size: 14px; font-weight: 700; }
 .tab-more .was { margin-top: 1px; font-size: 11px; color: var(--text-muted); }
 .tab-more .chev { margin-left: auto; color: var(--text-muted); }
+.mobile-account { display: none; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (min-width: 1100px) { .dashboard-page { max-width: 1120px; } }
@@ -114,6 +115,10 @@ main.content > div > div:first-child:not(.page-header) > p:first-child {
   .tabbar a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px 2px; color: var(--text-muted); text-decoration: none; font-size: 10.5px; font-weight: 650; }
   .tabbar a.active { color: var(--accent); } .tabbar .nav-icon { flex: none; }
   .alert-row { min-height: 68px; padding-inline: 12px; } .period-picker { max-width: none; }
+  .mobile-account { display: block; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--border); }
+  .mobile-account-copy { display: flex; flex-direction: column; gap: 2px; margin: 0 4px 12px; color: var(--text-muted); font-size: 11px; }
+  .mobile-account-copy strong { color: var(--text-secondary); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+  .mobile-signout { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; color: var(--accent-dark); background: var(--surface-accent); border-color: #ead5ca; }
 }
 @media (max-width: 480px) { .dashboard-header { align-items: flex-start; } .dashboard-header .button-primary { font-size: 0; padding: 9px 11px; } .dashboard-header .button-primary svg { margin: 0; } .card > div[style*="display: flex"] { flex-wrap: wrap; } input, select { max-width: 100%; } }
 @media (max-width: 600px) {
