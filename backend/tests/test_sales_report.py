@@ -229,6 +229,31 @@ def test_gross_profit_names_the_menus_it_could_not_cost():
           out["uncosted_menus"], ["ข้าวผัด", "น้ำเปล่า"])
 
 
+def test_buckets_follow_the_shops_clock_not_utc():
+    section("Chart buckets use the shop's local time")
+    # Stored timestamps are UTC. In Bangkok (+420 min) a 7pm sale is
+    # 12:00 UTC - bucketing by UTC would put the evening rush on the wrong
+    # bar, and an 8pm sale on the wrong DAY.
+    sales = [{"date": "2026-08-24T19:00:00+07:00", "total": 100, "items": []}]
+
+    utc = sales_report.summarise(sales, {}, [], "hour", 0)
+    bkk = sales_report.summarise(sales, {}, [], "hour", 420)
+
+    check("UTC puts it at 12:00", utc["points"][0]["t"], "2026-08-24T12:00")
+    check("Bangkok puts it at 19:00", bkk["points"][0]["t"], "2026-08-24T19:00")
+
+
+def test_a_late_evening_sale_stays_on_the_right_day():
+    section("An 8pm sale belongs to that day, not tomorrow")
+    sales = [{"date": "2026-08-24T20:30:00+07:00", "total": 100, "items": []}]
+
+    utc = sales_report.summarise(sales, {}, [], "day", 0)
+    bkk = sales_report.summarise(sales, {}, [], "day", 420)
+
+    check("UTC rolls it back a day", utc["points"][0]["t"], "2026-08-24")
+    check("Bangkok keeps it on the 24th", bkk["points"][0]["t"], "2026-08-24")
+
+
 def test_points_group_by_day_or_hour():
     section("Chart points bucket by the requested granularity")
     daily = sales_report.summarise(sample_sales(), {}, [], "day")
@@ -407,6 +432,8 @@ def main():
     test_both_timestamps_are_kept()
     test_the_overlap_is_wide_enough_for_a_delayed_terminal()
     test_gross_profit_names_the_menus_it_could_not_cost()
+    test_buckets_follow_the_shops_clock_not_utc()
+    test_a_late_evening_sale_stays_on_the_right_day()
     test_points_group_by_day_or_hour()
     test_top_items_rank_by_quantity()
     test_daily_breakdown_is_newest_first()

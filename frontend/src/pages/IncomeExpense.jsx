@@ -12,7 +12,6 @@ export default function IncomeExpense() {
   const { storeId } = useStore();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(String(now.getMonth())); // '' = whole year
-  const [tab, setTab] = useState('fixed');
   const [receipts, setReceipts] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [recipes, setRecipes] = useState({});
@@ -72,7 +71,11 @@ export default function IncomeExpense() {
     setShowAdd(false);
   }
 
-  const listForTab = tab === 'fixed' ? fixedInPeriod : tab === 'variable' ? variableInPeriod : materialInPeriod;
+  const allExpenses = [
+    ...fixedInPeriod.map((e) => ({ ...e, category: 'fixed' })),
+    ...variableInPeriod.map((e) => ({ ...e, category: 'variable' })),
+    ...materialInPeriod.map((e) => ({ ...e, category: 'material' })),
+  ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const isCurrentMonth = month !== '' && year === now.getFullYear() && parseInt(month) === now.getMonth();
 
   return (
@@ -101,43 +104,49 @@ export default function IncomeExpense() {
         <Stat label="ค่าวัตถุดิบ" value={materialSum} small />
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        {Object.entries(CATS).map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)} style={{ background: tab === k ? 'var(--surface-1)' : undefined }}>
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'material' && (
-        <div className="stat-card" style={{ marginBottom: 16 }}>
-          <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>เทียบยอดซื้อจริงกับต้นทุนตามสูตร</p>
-          <Row label="ซื้อจริง" value={materialSum} />
-          <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />
-          <Row label="ส่วนต่าง" value={materialSum - materialCostByRecipe} bold warn />
-        </div>
-      )}
-
+      {/* One list instead of three tabs. The categories were never
+          separate things to work on - they're a label on each entry - and
+          splitting them meant three places to look for "what did I spend
+          this month". The category is chosen when recording instead. */}
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-          <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>{CATS[tab]}</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+          <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>รายจ่ายทั้งหมด</p>
           {isCurrentMonth && <button onClick={() => setShowAdd(true)}>+ บันทึกรายจ่าย</button>}
         </div>
-        {listForTab.length === 0 && <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>ยังไม่มีรายการ</p>}
-        {listForTab.map((e, idx) => (
-          <div key={e.id || idx} style={{
-            display: 'flex', gap: 8, padding: '8px 0',
-            borderBottom: idx < listForTab.length - 1 ? '0.5px solid var(--border)' : 'none',
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          ค่าวัตถุดิบระบบคำนวณให้เองจากสูตร × ยอดขาย ไม่ต้องกรอก
+        </p>
+
+        {allExpenses.length === 0 && (
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>ยังไม่มีรายการ</p>
+        )}
+        {allExpenses.map((e, idx) => (
+          <div key={e.id || `${e.category}-${idx}`} style={{
+            display: 'flex', gap: 8, alignItems: 'center', padding: '9px 0',
+            borderBottom: idx < allExpenses.length - 1 ? '0.5px solid var(--border)' : 'none',
           }}>
-            <span style={{ flex: 1, fontSize: 13 }}>{e.name}</span>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{e.date}</span>
-            <span style={{ fontSize: 13 }}>฿{e.amount.toLocaleString()}</span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 13, display: 'block' }}>{e.name}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                {CATS[e.category]} · {e.date}
+              </span>
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 500 }}>฿{e.amount.toLocaleString()}</span>
           </div>
         ))}
       </div>
 
+      <div className="stat-card" style={{ marginTop: 16 }}>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+          เทียบยอดซื้อวัตถุดิบจริง กับต้นทุนตามสูตร
+        </p>
+        <Row label="ซื้อจริง" value={materialSum} />
+        <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />
+        <Row label="ส่วนต่าง" value={materialSum - materialCostByRecipe} bold warn />
+      </div>
+
       {showAdd && (
-        <AddExpenseModal category={tab} onCancel={() => setShowAdd(false)} onSave={saveExpense} />
+        <AddExpenseModal onCancel={() => setShowAdd(false)} onSave={saveExpense} />
       )}
     </div>
   );
@@ -160,14 +169,31 @@ function Row({ label, value, bold, warn }) {
     </div>
   );
 }
-function AddExpenseModal({ category, onCancel, onSave }) {
+function AddExpenseModal({ onCancel, onSave }) {
+  const [category, setCategory] = useState('fixed');
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกรายจ่าย ({CATS[category]})</p>
+        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกรายจ่าย</p>
+
+        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>หมวด</label>
+        {/* ค่าวัตถุดิบ is deliberately absent: it's computed from
+            deliveries already recorded, so letting someone type it here
+            would double-count the same spend against itself. */}
+        <select value={category} onChange={(e) => setCategory(e.target.value)}
+          style={{ width: '100%', margin: '4px 0 4px' }}>
+          <option value="fixed">{CATS.fixed}</option>
+          <option value="variable">{CATS.variable}</option>
+        </select>
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          {category === 'fixed'
+            ? 'จ่ายเท่าเดิมทุกเดือน เช่น ค่าเช่า ค่าเน็ต เงินเดือนประจำ'
+            : 'จ่ายไม่เท่ากันแต่ละเดือน เช่น ค่าไฟ ค่าแก๊ส ค่าล่วงเวลา'}
+        </p>
+
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>รายการ</label>
         <input value={name} onChange={(e) => setName(e.target.value)} style={{ width: '100%', margin: '4px 0 12px' }} />
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>จำนวนเงิน</label>

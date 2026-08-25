@@ -732,20 +732,23 @@ def _recipes_for(c: Ctx, store_id: str, sales: list[dict]) -> dict:
 
 @app.get("/api/{store_id}/sales/summary")
 def sales_summary(store_id: str, from_: str | None = None, to: str | None = None,
-                  granularity: str = "day", c: Ctx = Depends(store_money)):
+                  granularity: str = "day", tz_offset: int = 0,
+                  c: Ctx = Depends(store_money)):
+    """`tz_offset` is minutes ahead of UTC (Bangkok = 420). Chart buckets
+    follow the shop's clock, not the server's - see _bucket_key."""
     start, end = _window(from_, to)
     sales = c.store.list_sales(store_id, start, end)
     materials = c.store.list_materials(store_id)
 
     current = sales_report.summarise(
-        sales, _recipes_for(c, store_id, sales), materials, granularity)
+        sales, _recipes_for(c, store_id, sales), materials, granularity, tz_offset)
 
     # Compare against the equally-long window just before, so the headline
     # figure means something on its own.
     p_start, p_end = sales_report.previous_window(start, end)
     prev_sales = c.store.list_sales(store_id, p_start, p_end)
     previous = sales_report.summarise(
-        prev_sales, _recipes_for(c, store_id, prev_sales), materials, granularity)
+        prev_sales, _recipes_for(c, store_id, prev_sales), materials, granularity, tz_offset)
 
     return {**current,
             "from": start, "to": end, "granularity": granularity,
@@ -935,7 +938,17 @@ def close_count(store_id: str, session_id: str, c: Ctx = Depends(store_ctx)):
 
 
 @app.get("/api/{store_id}/variance/{session_id}")
-def variance_report(store_id: str, session_id: str, c: Ctx = Depends(store_money)):
+def variance_report(store_id: str, session_id: str, c: Ctx = Depends(store_ctx)):
+    """Not gated on view_money, deliberately.
+
+    Variance is the point of counting, and staff are the ones who count.
+    Sending them to a screen that reports nothing back would make the job
+    feel pointless and the counts would stop happening.
+
+    The trade-off is real and was taken knowingly: shortfall value is
+    derived from ingredient costs, so this does reveal roughly what
+    things cost. It stops well short of the takings and margin figures
+    that view_money guards."""
     session = c.store.get_count_session(store_id, session_id)
     if not session or session.get("status") != "closed":
         raise HTTPException(400, "ต้องปิดรอบนับก่อนถึงจะวิเคราะห์ได้")

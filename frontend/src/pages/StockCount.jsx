@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
+import VarianceSummary from '../components/VarianceSummary';
 
 /**
  * Counting a kitchen takes longer than one sitting, so entries save as
@@ -24,6 +25,7 @@ export default function StockCount() {
   const [hideDone, setHideDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [viewing, setViewing] = useState(null);
 
   useEffect(() => {
     if (!storeId) return;
@@ -95,7 +97,8 @@ export default function StockCount() {
     if (hideDone && String(values[m.id] ?? '').trim() !== '') return false;
     return true;
   });
-  const lastClosed = sessions.find((s) => s.status === 'closed');
+  const closedSessions = sessions.filter((s) => s.status === 'closed');
+  const lastClosed = closedSessions[0];
 
   if (!session) {
     return (
@@ -104,6 +107,14 @@ export default function StockCount() {
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
           นับของจริงในครัวแล้วบันทึก ระบบจะได้บอกได้ว่าของหายไปเท่าไหร่
         </p>
+
+        {/* The result of the last count sits above the button to start the
+            next one. Counting and finding out what it told you were two
+            separate pages, which meant finishing a count and having
+            nowhere obvious to see what it was for. */}
+        {lastClosed && (
+          <VarianceSummary storeId={storeId} session={lastClosed} />
+        )}
 
         <div className="card" style={{ marginBottom: 16 }}>
           <p style={{ fontSize: 13, margin: '0 0 12px' }}>
@@ -116,18 +127,32 @@ export default function StockCount() {
           </button>
         </div>
 
-        {sessions.filter((s) => s.status === 'closed').length > 0 && (
+        {closedSessions.length > 1 && (
           <div className="card">
-            <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>ประวัติการนับ</p>
-            {sessions.filter((s) => s.status === 'closed').map((s, idx, arr) => (
-              <div key={s.id} style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0',
-                borderBottom: idx < arr.length - 1 ? '0.5px solid var(--border)' : 'none',
-              }}>
-                <span style={{ flex: 1, fontSize: 13 }}>{formatDate(s.closed_at)}</span>
-                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                  {Object.keys(s.entries || {}).length} รายการ
-                </span>
+            <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>ประวัติการนับ</p>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+              กดเพื่อดูผลของรอบนั้น
+            </p>
+            {closedSessions.slice(1).map((s, idx, arr) => (
+              <div key={s.id} onClick={() => setViewing(viewing === s.id ? null : s)}
+                style={{
+                  padding: '8px 0', cursor: 'pointer',
+                  borderBottom: idx < arr.length - 1 ? '0.5px solid var(--border)' : 'none',
+                }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: 1, fontSize: 13 }}>{formatDate(s.closed_at)}</span>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                    {Object.keys(s.entries || {}).length} รายการ
+                  </span>
+                  <span style={{ color: 'var(--text-muted)' }}>
+                    {viewing?.id === s.id ? '⌄' : '›'}
+                  </span>
+                </div>
+                {viewing?.id === s.id && (
+                  <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 10 }}>
+                    <VarianceSummary storeId={storeId} session={s} />
+                  </div>
+                )}
               </div>
             ))}
           </div>

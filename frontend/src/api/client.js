@@ -144,8 +144,11 @@ export const api = {
 
   // ---- sales reporting (reads our saved copy, not the POS) ----
   getSalesSummary: (storeId, from, to, granularity = 'day') =>
+    // The shop's UTC offset, so chart buckets follow its clock rather
+    // than the server's. getTimezoneOffset() counts the other way round.
     request(`/api/${storeId}/sales/summary?from_=${encodeURIComponent(from)}` +
-      `&to=${encodeURIComponent(to)}&granularity=${granularity}`),
+      `&to=${encodeURIComponent(to)}&granularity=${granularity}` +
+      `&tz_offset=${-new Date().getTimezoneOffset()}`),
   getTopItems: (storeId, from, to, limit = 5) =>
     request(`/api/${storeId}/sales/top-items?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}&limit=${limit}`),

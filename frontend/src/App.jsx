@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { StoreProvider } from './store/StoreContext';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { api } from './api/client';
-import { SIDEBAR_GROUPS, TABS } from './nav';
+import { DAILY, REGULAR, SETUP, TABS } from './nav';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
@@ -13,7 +13,6 @@ import Materials from './pages/Materials';
 import Receiving from './pages/Receiving';
 import Recipes from './pages/Recipes';
 import StockCount from './pages/StockCount';
-import Variance from './pages/Variance';
 import Receipts from './pages/Receipts';
 import IncomeExpense from './pages/IncomeExpense';
 import Settings from './pages/Settings';
@@ -71,53 +70,11 @@ function AppShell() {
     api.adminWhoami().then(() => setIsAdmin(true)).catch(() => setIsAdmin(false));
   }, []);
 
-  const allowed = (item) => !item.needs || can(item.needs);
 
   return (
     <BrowserRouter>
       <div className="app-shell">
-        <nav className="sidebar">
-          {profile.business_name && (
-            <p style={{
-              fontSize: 12, fontWeight: 500, margin: '0 0 12px',
-              paddingBottom: 12, borderBottom: '0.5px solid var(--border)',
-              wordBreak: 'break-word',
-            }}>
-              {profile.business_name}
-            </p>
-          )}
-
-          {SIDEBAR_GROUPS.map((group) => {
-            const items = group.items.filter(allowed);
-            if (items.length === 0) return null;
-            return (
-              <div key={group.title}>
-                <div className="nav-group">{group.title}</div>
-                {items.map((item) => (
-                  <NavLink key={item.to} to={item.to} end={item.end}
-                    className={({ isActive }) => (isActive ? 'active' : '')}>
-                    {item.label}
-                  </NavLink>
-                ))}
-              </div>
-            );
-          })}
-
-          {isAdmin && (
-            <div>
-              <div className="nav-group">ระบบ</div>
-              <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
-                ภาพรวมระบบ
-              </NavLink>
-            </div>
-          )}
-
-          <div style={{ marginTop: 'auto', paddingTop: 16, fontSize: 11, color: 'var(--text-muted)' }}>
-            <p style={{ margin: '0 0 2px', wordBreak: 'break-all' }}>{profile.email}</p>
-            <p style={{ margin: '0 0 8px' }}>{ROLE_LABEL[profile.role]}</p>
-            <button onClick={signOut} style={{ fontSize: 11, width: '100%' }}>ออกจากระบบ</button>
-          </div>
-        </nav>
+        <Sidebar isAdmin={isAdmin} />
 
         <main className="content">
           <Routes>
@@ -128,7 +85,9 @@ function AppShell() {
             <Route path="/receiving" element={<Receiving />} />
             <Route path="/recipes" element={<Recipes />} />
             <Route path="/stock-count" element={<StockCount />} />
-            <Route path="/variance" element={can('view_money') ? <Variance /> : <Navigate to={homePath} replace />} />
+            {/* Merged into นับของ - kept as a redirect so an old bookmark
+                or a link someone shared still lands somewhere useful. */}
+            <Route path="/variance" element={<Navigate to="/stock-count" replace />} />
             <Route path="/receipts" element={can('view_money') ? <Receipts /> : <Navigate to={homePath} replace />} />
             <Route path="/income-expense" element={can('view_money') ? <IncomeExpense /> : <Navigate to={homePath} replace />} />
             <Route path="/users" element={can('manage_users') ? <Users /> : <Navigate to={homePath} replace />} />
@@ -150,5 +109,85 @@ function AppShell() {
         </nav>
       </div>
     </BrowserRouter>
+  );
+}
+
+/**
+ * Lives inside the router so it can tell which page is open - the setup
+ * group expands on its own when you're already on one of its pages,
+ * rather than hiding the link you're currently looking at.
+ */
+function Sidebar({ isAdmin }) {
+  const { profile, signOut, can } = useAuth();
+  const [setupOpen, setSetupOpen] = useState(false);
+  const location = useLocation();
+
+  const allowed = (item) => !item.needs || can(item.needs);
+  const setupItems = SETUP.items.filter(allowed);
+  const onSetupPage = setupItems.some((i) => location.pathname.startsWith(i.to));
+
+  return (
+        <nav className="sidebar">
+        {profile.business_name && (
+          <p style={{
+            fontSize: 12, fontWeight: 500, margin: '0 0 12px',
+            paddingBottom: 12, borderBottom: '0.5px solid var(--border)',
+            wordBreak: 'break-word',
+          }}>
+            {profile.business_name}
+          </p>
+        )}
+
+        {/* One flat list. The old headings ("ทุกวัน", "ทุกสัปดาห์",
+            "ดูย้อนหลัง") took up more room than the two or three links
+            under each, which made a short menu read as a filing system. */}
+        {[...DAILY, ...REGULAR].filter(allowed).map((item) => (
+          <NavLink key={item.to} to={item.to} end={item.end}
+            className={({ isActive }) => (isActive ? 'active' : '')}>
+            {item.label}
+          </NavLink>
+        ))}
+
+        {/* Setup collapses behind one entry - four links nobody opens
+            twice shouldn't sit at the same weight as the daily work.
+            Opens automatically when you're already on one of them, so
+            the menu never hides where you currently are. */}
+        {setupItems.length > 0 && (
+          <>
+            <button type="button" onClick={() => setSetupOpen(!setupOpen)}
+              className={onSetupPage ? 'nav-toggle active' : 'nav-toggle'}>
+              {SETUP.label}
+              <span style={{ marginLeft: 'auto', fontSize: 11 }}>
+                {setupOpen || onSetupPage ? '⌄' : '›'}
+              </span>
+            </button>
+            {(setupOpen || onSetupPage) && (
+              <div className="nav-sub">
+                {setupItems.map((item) => (
+                  <NavLink key={item.to} to={item.to}
+                    className={({ isActive }) => (isActive ? 'active' : '')}>
+                    {item.label}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {isAdmin && (
+          <div>
+            <div className="nav-group">ระบบ</div>
+            <NavLink to="/admin" className={({ isActive }) => (isActive ? 'active' : '')}>
+              ภาพรวมระบบ
+            </NavLink>
+          </div>
+        )}
+
+        <div style={{ marginTop: 'auto', paddingTop: 16, fontSize: 11, color: 'var(--text-muted)' }}>
+          <p style={{ margin: '0 0 2px', wordBreak: 'break-all' }}>{profile.email}</p>
+          <p style={{ margin: '0 0 8px' }}>{ROLE_LABEL[profile.role]}</p>
+          <button onClick={signOut} style={{ fontSize: 11, width: '100%' }}>ออกจากระบบ</button>
+        </div>
+      </nav>
   );
 }

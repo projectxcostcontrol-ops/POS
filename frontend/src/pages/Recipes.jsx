@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
+import MaterialPicker from '../components/MaterialPicker';
 
 const KIND_LABEL = {
   cooked: 'อาหารปรุงเอง',
@@ -82,7 +83,7 @@ export default function Recipes() {
         // Nothing to portion here. Offering the skip beats an empty form,
         // which would just look like the suggestion failed.
         if (window.confirm(
-          `AI คิดว่า "${item.name}" เป็นค่าบริการ ไม่ต้องตัดสต๊อก\nทำเครื่องหมายว่าไม่ต้องมีสูตรเลยไหม?`)) {
+          `ระบบคิดว่า "${item.name}" เป็นค่าบริการ ไม่ต้องตัดสต๊อก\nทำเครื่องหมายว่าไม่ต้องมีสูตรเลยไหม?`)) {
           await api.skipRecipe(storeId, item.name);
           setSkips([...skips, item.name]);
           return;
@@ -117,21 +118,6 @@ export default function Recipes() {
     setRows(rows.filter((_, i) => i !== idx));
   }
 
-  async function createMaterialForRow(idx) {
-    const row = rows[idx];
-    const name = window.prompt('ชื่อวัตถุดิบ', row.suggested_name || '');
-    if (!name) return;
-    const unit = window.prompt('หน่วยที่เก็บในคลัง (เช่น กรัม, ขวด, ฟอง)', row.suggested_unit || '');
-    if (!unit) return;
-
-    const id = `mat_${Date.now()}`;
-    // No cost field on purpose: unit cost comes from what deliveries
-    // actually charged, never from a number typed at recipe time.
-    await api.upsertMaterial(storeId, id, { name: name.trim(), unit: unit.trim(), par_level: 0 });
-    setMaterials(await api.getMaterials(storeId));
-    updateRow(idx, { material_id: id });
-  }
-
   const incompleteRows = rows.filter(
     (r) => !r.material_id || r.qty === '' || r.qty === null || Number(r.qty) <= 0).length;
 
@@ -159,7 +145,7 @@ export default function Recipes() {
           background: '#fdf3e3', border: '1px solid var(--text-warning)', borderRadius: 8,
           padding: '10px 12px', marginBottom: 12, fontSize: 12, color: 'var(--text-warning)',
         }}>
-          มีร่างจาก AI {draftCount} เมนู รอกรอกปริมาณ — ยังไม่มีผลกับสต๊อกจนกว่าจะเปิดกรอกและบันทึกทีละเมนู
+          ระบบผูกไว้ให้ {draftCount} เมนู รอกรอกปริมาณ — ยังไม่มีผลกับสต๊อกจนกว่าจะเปิดกรอกและบันทึกทีละเมนู
         </div>
       )}
 
@@ -184,7 +170,7 @@ export default function Recipes() {
                   {recipe.length
                     ? (showMoney ? `${recipe.length} วัตถุดิบ · ต้นทุน ฿${cost.toFixed(2)}/จาน` : `${recipe.length} วัตถุดิบ`)
                     : skipped ? 'ไม่ต้องมีสูตร'
-                      : draft ? `ร่างจาก AI ${draft.ingredients.length} วัตถุดิบ · รอกรอกปริมาณ`
+                      : draft ? `ระบบผูกให้ ${draft.ingredients.length} วัตถุดิบ · รอกรอกปริมาณ`
                         : 'ยังไม่ผูกสูตร'}
                 </p>
               </div>
@@ -203,9 +189,9 @@ export default function Recipes() {
                   ) : (
                     aiAvailable && !recipe.length && (
                       <button onClick={() => suggestOne(it)} disabled={suggesting === it.name}
-                        title="ให้ AI ช่วยร่างว่าเมนูนี้ใช้วัตถุดิบอะไร"
+                        title="ให้ระบบผูกวัตถุดิบให้อัตโนมัติ"
                         style={{ fontSize: 12, padding: '4px 8px' }}>
-                        {suggesting === it.name ? '...' : '🪄'}
+                        {suggesting === it.name ? '...' : '⚡'}
                       </button>
                     )
                   )}
@@ -224,7 +210,7 @@ export default function Recipes() {
           <div className="modal-box" style={{ width: 380, maxHeight: '85vh', overflowY: 'auto' }}
             onClick={(e) => e.stopPropagation()}>
             <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>
-              {editingItem.from === 'ai' ? '🪄 ร่างสูตรจาก AI' : 'สูตรอาหาร'}
+              {editingItem.from === 'ai' ? '⚡ ผูกโดยระบบ' : 'สูตรอาหาร'}
             </p>
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
               {editingItem.item.name}
@@ -238,7 +224,7 @@ export default function Recipes() {
                 background: 'var(--surface-1)', borderRadius: 8, padding: '10px 12px',
                 marginBottom: 12, fontSize: 11, color: 'var(--text-secondary)',
               }}>
-                AI เสนอว่าน่าจะใช้วัตถุดิบเหล่านี้ — <b>ปริมาณต้องกรอกเอง</b> เพราะแต่ละร้านตักไม่เท่ากัน
+                ระบบเดาว่าน่าจะใช้วัตถุดิบเหล่านี้ — <b>ปริมาณต้องกรอกเอง</b> เพราะแต่ละร้านตักไม่เท่ากัน
                 {editingItem.kind === 'resale' && ' (ขาย 1 = ตัด 1 ใส่ให้แล้ว ตรวจอีกรอบได้)'}
               </div>
             )}
@@ -253,21 +239,16 @@ export default function Recipes() {
               <div key={idx} style={{ marginBottom: 8 }}>
                 {r.suggested_name && (
                   <p style={{ fontSize: 10, color: 'var(--text-muted)', margin: '0 0 2px' }}>
-                    AI เสนอ: {r.suggested_name}{r.suggested_unit ? ` (${r.suggested_unit})` : ''}
+                    ระบบเดา: {r.suggested_name}{r.suggested_unit ? ` (${r.suggested_unit})` : ''}
                   </p>
                 )}
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <select value={r.material_id} onChange={(e) => updateRow(idx, { material_id: e.target.value })}
-                    style={{ flex: 1.3, fontSize: 12, minWidth: 0 }}>
-                    <option value="">— เลือกวัตถุดิบ —</option>
-                    {materials.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-                  {!r.material_id && (
-                    <button onClick={() => createMaterialForRow(idx)}
-                      style={{ fontSize: 11, padding: '4px 6px', whiteSpace: 'nowrap' }}>
-                      + สร้าง
-                    </button>
-                  )}
+                  {/* Same picker as the delivery form: type to search, and
+                      a name that doesn't exist yet can be added inline
+                      instead of abandoning the recipe to go create it. */}
+                  <MaterialPicker materials={materials} value={r.material_id} storeId={storeId}
+                    onChange={(id) => updateRow(idx, { material_id: id })}
+                    onCreated={async () => setMaterials(await api.getMaterials(storeId))} />
                   <input type="number" value={r.qty} placeholder="?"
                     onChange={(e) => updateRow(idx, { qty: e.target.value })}
                     style={{

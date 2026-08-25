@@ -24,8 +24,10 @@ export default function More() {
         const items = group.items.filter((i) => !i.needs || can(i.needs));
         if (items.length === 0) return null;
         return (
-          <div key={group.title}>
-            <div className="nav-group">{group.title}</div>
+          <div key={group.title || 'main'}>
+            {/* The first group has no heading - a label over the only
+                list on screen names nothing. */}
+            {group.title && <div className="nav-group">{group.title}</div>}
             {items.map((item) => (
               <NavLink key={item.to} to={item.to}>
                 <span className="emoji">{item.emoji}</span>

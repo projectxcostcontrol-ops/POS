@@ -84,7 +84,7 @@ export default function Receipts() {
 
   return (
     <div>
-      <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>ยอดขาย</p>
+      <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>รายการขาย</p>
       <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
         สรุปรายวัน กดที่วันไหนเพื่อดูบิลของวันนั้น
       </p>
@@ -137,9 +137,8 @@ export default function Receipts() {
                 value={summary.bill_count
                   ? baht(summary.total / summary.bill_count) : '—'} />
             </div>
-            <SalesChart points={summary.points} formatValue={baht}
-              formatLabel={(pt) => new Date(pt.t).toLocaleDateString('th-TH',
-                { day: 'numeric', month: 'short' })} />
+            <SalesChart points={summary.points} from={summary.from} to={summary.to}
+              granularity="day" formatValue={baht} />
           </div>
 
           {days.length === 0 ? (

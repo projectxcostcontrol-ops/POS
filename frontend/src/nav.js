@@ -25,39 +25,42 @@ export const DAILY = [
     was: 'รับของเข้า' },
 ];
 
-export const MORE_GROUPS = [
-  {
-    title: 'ทุกสัปดาห์',
-    items: [
-      { to: '/stock-count', emoji: '📋', label: 'นับของ', was: 'นับสต๊อก' },
-      { to: '/variance', emoji: '🔍', label: 'ของหายไปไหน',
-        was: 'วิเคราะห์ส่วนต่าง', needs: 'view_money' },
-    ],
-  },
-  {
-    title: 'ดูย้อนหลัง',
-    items: [
-      { to: '/receipts', emoji: '🧾', label: 'ยอดขาย',
-        was: 'รายการบิล', needs: 'view_money' },
-      { to: '/income-expense', emoji: '💰', label: 'รายรับรายจ่าย',
-        needs: 'view_money' },
-    ],
-  },
-  {
-    title: 'ตั้งค่าครั้งเดียว',
-    items: [
-      { to: '/recipes', emoji: '🍳', label: 'สูตรอาหาร' },
-      { to: '/items', emoji: '🏷️', label: 'เมนูในร้าน', was: 'รายการสินค้า' },
-      { to: '/users', emoji: '👥', label: 'ผู้ใช้งาน', needs: 'manage_users' },
-      { to: '/settings', emoji: '⚙️', label: 'ตั้งค่า', needs: 'manage_settings' },
-    ],
-  },
+// Work that comes round every week or so, plus the records people look
+// back at. One flat list rather than headed sections: with two or three
+// entries each, the headings were taller than the things they organised
+// and made a short menu look like a filing system.
+export const REGULAR = [
+  // "ของหายไปไหน" used to be its own page. It now lives inside นับของ,
+  // because the result of a count belongs where the counting happens -
+  // finishing a count and having to go find the answer somewhere else is
+  // how people stopped looking at it.
+  { to: '/stock-count', emoji: '📋', label: 'นับของ · ของหายไปไหน',
+    was: 'นับสต๊อก + วิเคราะห์ส่วนต่าง' },
+  { to: '/receipts', emoji: '🧾', label: 'รายการขาย',
+    was: 'รายการบิล', needs: 'view_money' },
+  { to: '/income-expense', emoji: '💰', label: 'รายรับรายจ่าย',
+    needs: 'view_money' },
 ];
 
-/** Sidebar layout: daily work first, then the same groups as the More page. */
-export const SIDEBAR_GROUPS = [
-  { title: 'ทุกวัน', items: DAILY },
-  ...MORE_GROUPS,
+// Things set up once and rarely touched again. Collapsed behind a single
+// "ตั้งค่าระบบ" entry so four rarely-used links don't sit at the same
+// weight as the pages someone opens every morning.
+export const SETUP = {
+  emoji: '⚙️',
+  label: 'ตั้งค่าระบบ',
+  items: [
+    { to: '/recipes', emoji: '🍳', label: 'สูตรอาหาร' },
+    { to: '/items', emoji: '🏷️', label: 'เมนูในร้าน', was: 'รายการสินค้า' },
+    { to: '/users', emoji: '👥', label: 'ผู้ใช้งาน', needs: 'manage_users' },
+    { to: '/settings', emoji: '🔧', label: 'เชื่อมต่อ & สาขา', was: 'ตั้งค่า',
+      needs: 'manage_settings' },
+  ],
+};
+
+/** Everything below the daily three - used by the phone's "เพิ่มเติม" page. */
+export const MORE_GROUPS = [
+  { title: '', items: REGULAR },
+  { title: SETUP.label, items: SETUP.items },
 ];
 
 /** Phone bottom bar: the daily three, plus a way into everything else. */

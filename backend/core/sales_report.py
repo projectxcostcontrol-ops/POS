@@ -35,7 +35,7 @@ def _parse(iso: str) -> datetime | None:
 
 
 def summarise(sales: list[dict], recipes: dict, materials: list[dict],
-              granularity: str = "day") -> dict:
+              granularity: str = "day", tz_offset_minutes: int = 0) -> dict:
     """One summary over a set of sales.
 
     `recipes` maps menu name -> [{material_id, qty}]
@@ -56,7 +56,7 @@ def summarise(sales: list[dict], recipes: dict, materials: list[dict],
         total += sale.get("total") or 0
         if sale.get("is_refund"):
             refunds += 1
-        key = _bucket_key(sale.get("date") or "", granularity)
+        key = _bucket_key(sale.get("date") or "", granularity, tz_offset_minutes)
         if key:
             buckets[key] = buckets.get(key, 0) + (sale.get("total") or 0)
 
@@ -89,13 +89,25 @@ def summarise(sales: list[dict], recipes: dict, materials: list[dict],
     }
 
 
-def _bucket_key(iso: str, granularity: str) -> str | None:
+def _bucket_key(iso: str, granularity: str, tz_offset_minutes: int = 0) -> str | None:
+    """Group by the shop's local clock, not UTC.
+
+    Timestamps are stored in UTC, which is right for storage and wrong for
+    a chart: in Thailand (UTC+7) an evening sale falls into the next UTC
+    day, so "today" would start at 7am and the busiest hours would land
+    on the wrong bar. The caller passes its own offset rather than the
+    server assuming one, since the server has no idea where the shop is."""
     dt = _parse(iso)
     if dt is None:
         return None
+    # Normalize to UTC before shifting. _parse keeps whatever offset the
+    # string carried, and strftime on an aware datetime prints THAT
+    # offset's wall time - so adding the shop's offset to a "+07:00"
+    # timestamp would apply the shift twice.
+    local = dt.astimezone(timezone.utc) + timedelta(minutes=tz_offset_minutes)
     if granularity == "hour":
-        return dt.strftime("%Y-%m-%dT%H:00")
-    return dt.strftime("%Y-%m-%d")
+        return local.strftime("%Y-%m-%dT%H:00")
+    return local.strftime("%Y-%m-%d")
 
 
 def top_items(sales: list[dict], limit: int = 5) -> list[dict]:

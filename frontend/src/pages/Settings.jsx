@@ -19,10 +19,6 @@ export default function Settings() {
   const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState('');
   const [resettingCursor, setResettingCursor] = useState(false);
-  const [recon, setRecon] = useState(null);
-  const [checking, setChecking] = useState(false);
-  const [resyncing, setResyncing] = useState(false);
-  const [reconError, setReconError] = useState('');
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState(null);
 
@@ -110,34 +106,6 @@ export default function Settings() {
       setSyncError(e.message);
     } finally {
       setSyncing(false);
-    }
-  }
-
-  async function runReconcile() {
-    setChecking(true);
-    setReconError('');
-    try {
-      setRecon(await api.reconcileSales(storeId, 1));
-    } catch (e) {
-      setRecon(null);
-      setReconError(e.message);
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  async function runRepair() {
-    setResyncing(true);
-    setReconError('');
-    try {
-      await api.repairSales(storeId);
-      // Re-check straight away so the result is visible rather than
-      // leaving someone to wonder whether it worked.
-      setRecon(await api.reconcileSales(storeId, 1));
-    } catch (e) {
-      setReconError(e.message);
-    } finally {
-      setResyncing(false);
     }
   }
 
@@ -276,42 +244,6 @@ export default function Settings() {
           <p style={{ fontSize: 12, color: 'var(--text-success)', marginTop: 8 }}>
             ย้ายแล้ว {migrateResult.migrated_materials} รายการ
           </p>
-        )}
-      </div>
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>ตรวจสอบยอดขาย</p>
-        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          เทียบยอดใน Loyverse กับที่ระบบเก็บไว้ ถ้าไม่ตรง กด "ดึงประวัติทั้งหมดใหม่"
-          เพื่อเก็บบิลที่ตกหล่น (ดึงได้เท่าที่ Loyverse ยังเก็บไว้ให้)
-        </p>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={runReconcile} disabled={checking || !storeId}>
-            {checking ? 'กำลังตรวจ...' : 'ตรวจสอบวันนี้'}
-          </button>
-          <button onClick={runRepair} disabled={resyncing || !storeId}>
-            {resyncing ? 'กำลังดึงซ้ำ...' : 'ดึงประวัติทั้งหมดใหม่'}
-          </button>
-        </div>
-
-        {recon && (
-          <div style={{
-            marginTop: 12, fontSize: 12,
-            color: recon.missing_count > 0 ? 'var(--text-warning)' : 'var(--text-success)',
-          }}>
-            <div>Loyverse: {recon.pos.count} บิล · ฿{recon.pos.total.toLocaleString()}</div>
-            <div>ในระบบ: {recon.saved.count} บิล · ฿{recon.saved.total.toLocaleString()}</div>
-            {recon.missing_count > 0 ? (
-              <div style={{ marginTop: 6 }}>
-                ⚠ ขาดไป {recon.missing_count} บิล — กด "ดึงประวัติทั้งหมดใหม่" เพื่อเก็บเพิ่ม
-              </div>
-            ) : (
-              <div style={{ marginTop: 6 }}>✓ ตรงกันแล้ว</div>
-            )}
-          </div>
-        )}
-        {reconError && (
-          <p style={{ fontSize: 12, color: 'var(--text-danger)', marginTop: 8 }}>{reconError}</p>
         )}
       </div>
 

@@ -39,6 +39,9 @@ export default function Dashboard() {
   const [top, setTop] = useState([]);
   const [loading, setLoading] = useState(false);
   const [salesError, setSalesError] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshNote, setRefreshNote] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   // Alerts load independently of the sales figures. If the sales endpoints
   // fail, staff should still see that stock is running out - the two
@@ -46,7 +49,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!storeId) return;
     api.getAlerts(storeId).then(setAlerts).catch(() => setAlerts(null));
-  }, [storeId]);
+  }, [storeId, reloadKey]);
 
   useEffect(() => {
     if (!storeId || !showMoney) return;
@@ -64,7 +67,34 @@ export default function Dashboard() {
       .then(([s, t]) => { setSummary(s); setTop(t); })
       .catch((e) => { setSummary(null); setSalesError(e.message); })
       .finally(() => setLoading(false));
-  }, [storeId, period, custom, showMoney]);
+  }, [storeId, period, custom, showMoney, reloadKey]);
+
+  async function refreshAll() {
+    setRefreshing(true);
+    setRefreshNote(null);
+    try {
+      await api.sync(storeId);
+
+      // Verify rather than assume. A sync that returns without error can
+      // still have missed receipts a till uploaded late, and the only way
+      // to know is to compare counts against the POS.
+      let check = await api.reconcileSales(storeId, 1);
+      if (check.missing_count > 0) {
+        await api.repairSales(storeId);
+        check = await api.reconcileSales(storeId, 1);
+      }
+
+      setRefreshNote(check.missing_count > 0
+        ? { ok: false, text: `ยังขาด ${check.missing_count} บิล — Loyverse อาจยังส่งข้อมูลไม่ครบ ลองอีกครั้งในสักครู่` }
+        : { ok: true, text: `อัปเดตแล้ว · ตรงกับ Loyverse ${check.pos.count} บิล` });
+
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setRefreshNote({ ok: false, text: `อัปเดตไม่สำเร็จ: ${e.message}` });
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
 
@@ -73,10 +103,33 @@ export default function Dashboard() {
       <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 2px' }}>
         {profile.business_name || 'หน้าแรก'}
       </p>
-      <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 18px' }}>
-        {new Date().toLocaleDateString('th-TH',
-          { weekday: 'long', day: 'numeric', month: 'long' })}
-      </p>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 12, margin: '0 0 18px',
+      }}>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+          {new Date().toLocaleDateString('th-TH',
+            { weekday: 'long', day: 'numeric', month: 'long' })}
+        </p>
+        {/* One button that does the whole job: pull anything new from the
+            POS, check nothing was missed, and repair it if it was. The
+            old version made someone open Settings, press "ตรวจสอบ", read
+            two numbers, decide they disagreed, then press a second
+            button - a diagnostic workflow handed to a shop owner. */}
+        <button onClick={refreshAll} disabled={refreshing}
+          style={{ fontSize: 12, whiteSpace: 'nowrap', flex: 'none' }}>
+          {refreshing ? 'กำลังอัปเดต...' : '↻ อัปเดตข้อมูล'}
+        </button>
+      </div>
+
+      {refreshNote && (
+        <p style={{
+          fontSize: 11.5, margin: '-8px 2px 14px',
+          color: refreshNote.ok ? 'var(--text-success)' : 'var(--text-warning)',
+        }}>
+          {refreshNote.text}
+        </p>
+      )}
 
       <Alerts alerts={alerts} />
 
@@ -230,12 +283,6 @@ function PeriodPicker({ period, setPeriod, custom, setCustom }) {
 
 function SummaryCard({ summary, period }) {
   const hourly = period === 'day';
-  const label = (pt) => {
-    const d = new Date(pt.t);
-    return hourly
-      ? d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })
-      : d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
-  };
 
   return (
     <>
@@ -265,7 +312,8 @@ function SummaryCard({ summary, period }) {
           )}
         </div>
 
-        <SalesChart points={summary.points} formatLabel={label} formatValue={baht} />
+        <SalesChart points={summary.points} from={summary.from} to={summary.to}
+          granularity={hourly ? 'hour' : 'day'} formatValue={baht} />
       </div>
 
       <div style={{ display: 'flex', gap: 9, marginBottom: 4 }}>

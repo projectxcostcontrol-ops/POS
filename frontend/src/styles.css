@@ -105,6 +105,34 @@ input, select {
   width: 300px;
 }
 
+/* The collapsed "ตั้งค่าระบบ" entry. Styled to match the nav links so it
+   reads as one of them, not as a control bolted on beside them. */
+.sidebar .nav-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar .nav-toggle:hover, .sidebar .nav-toggle.active {
+  background: var(--surface-1);
+  color: var(--text-primary);
+}
+.sidebar .nav-sub {
+  margin-left: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.sidebar .nav-sub a { font-size: 12.5px; }
+
 /* Sidebar group headings. The menu is ordered by how often each page is
    used, not alphabetically or by when it was built - daily work first,
    one-time setup last. */
