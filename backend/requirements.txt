@@ -1,0 +1,25 @@
+# Pinned deliberately.
+#
+# These were ">=" and a redeploy that changed no code at all broke login:
+# pip resolved a newer google-cloud-firestore/grpcio pair that rejected
+# its own default database id ("Invalid database id %28default%29"). The
+# app is only as stable as what it's built on, and an unpinned build is a
+# different app every time it ships.
+#
+# To take a newer version: raise it here, deploy, and check that login
+# and a sales page still work. That's a decision, not something that
+# should happen on its own.
+
+fastapi==0.115.6
+uvicorn==0.34.0
+requests==2.32.3
+firebase-admin==6.6.0
+python-dotenv==1.0.1
+python-multipart==0.0.20
+
+# firebase-admin pulls these in; pinned because the failure above came
+# from this pair moving underneath us, not from firebase-admin itself.
+google-cloud-firestore==2.20.0
+google-cloud-storage==2.19.0
+grpcio==1.68.1
+protobuf==5.29.2
