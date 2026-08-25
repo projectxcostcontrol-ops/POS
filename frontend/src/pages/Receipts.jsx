@@ -58,7 +58,7 @@ export default function Receipts() {
     setError('');
 
     Promise.all([
-      api.getSalesSummary(storeId, from, to, 'day'),
+      api.getSalesOverview(storeId, from, to, 'day', 0),
       api.getDailySales(storeId, from, to),
     ])
       .then(([s, d]) => { setSummary(s); setDays(d); })

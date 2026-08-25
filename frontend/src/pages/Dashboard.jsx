@@ -60,11 +60,8 @@ export default function Dashboard() {
     setLoading(true);
     setSalesError('');
 
-    Promise.all([
-      api.getSalesSummary(storeId, from, to, granularity),
-      api.getTopItems(storeId, from, to, 5),
-    ])
-      .then(([s, t]) => { setSummary(s); setTop(t); })
+    api.getSalesOverview(storeId, from, to, granularity, 5)
+      .then((s) => { setSummary(s); setTop(s.top_items || []); })
       .catch((e) => { setSummary(null); setSalesError(e.message); })
       .finally(() => setLoading(false));
   }, [storeId, period, custom, showMoney, reloadKey]);

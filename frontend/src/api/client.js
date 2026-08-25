@@ -143,15 +143,13 @@ export const api = {
     request(`/api/${storeId}/recipes/skips/${encodeURIComponent(itemName)}`, { method: 'DELETE' }),
 
   // ---- sales reporting (reads our saved copy, not the POS) ----
-  getSalesSummary: (storeId, from, to, granularity = 'day') =>
-    // The shop's UTC offset, so chart buckets follow its clock rather
-    // than the server's. getTimezoneOffset() counts the other way round.
-    request(`/api/${storeId}/sales/summary?from_=${encodeURIComponent(from)}` +
-      `&to=${encodeURIComponent(to)}&granularity=${granularity}` +
+  // One call for the whole sales screen. Splitting it meant the same
+  // window of sales was fetched twice over.
+  getSalesOverview: (storeId, from, to, granularity = 'day', top = 5) =>
+    // getTimezoneOffset() counts the opposite way to what the API wants.
+    request(`/api/${storeId}/sales/overview?from_=${encodeURIComponent(from)}` +
+      `&to=${encodeURIComponent(to)}&granularity=${granularity}&top=${top}` +
       `&tz_offset=${-new Date().getTimezoneOffset()}`),
-  getTopItems: (storeId, from, to, limit = 5) =>
-    request(`/api/${storeId}/sales/top-items?from_=${encodeURIComponent(from)}` +
-      `&to=${encodeURIComponent(to)}&limit=${limit}`),
   getDailySales: (storeId, from, to) =>
     request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}`),

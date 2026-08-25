@@ -395,6 +395,16 @@ class Store:
         doc = self._col(store_id, "recipes").document(item_name).get()
         return (doc.to_dict() or {}).get("ingredients", [])
 
+    def all_recipes(self, store_id: str) -> dict[str, list[dict]]:
+        """Every recipe in one read, keyed by menu name.
+
+        A sales report needs the recipe behind each menu that sold, and
+        fetching them one at a time is a read per distinct dish - dozens
+        of round trips to answer one screen. A restaurant's whole recipe
+        book is small enough to fetch at once and far cheaper that way."""
+        return {d.id: (d.to_dict() or {}).get("ingredients", [])
+                for d in self._col(store_id, "recipes").stream()}
+
     def set_recipe(self, store_id: str, item_name: str, ingredients: list[dict]):
         self._col(store_id, "recipes").document(item_name).set({"ingredients": ingredients})
 
@@ -489,19 +499,27 @@ class Store:
 
     def list_sales(self, store_id: str, start: str | None = None,
                    end: str | None = None) -> list[dict]:
-        """Sales in a date window, oldest first. Dates are ISO strings and
-        compare correctly as text, which keeps this a simple range scan."""
-        sales = []
-        for d in self._col(store_id, "sales").stream():
-            row = d.to_dict() or {}
-            at = row.get("date") or ""
-            if start and at < start:
-                continue
-            if end and at > end:
-                continue
-            sales.append(row)
-        sales.sort(key=lambda r: r.get("date") or "")
-        return sales
+        """Sales in a date window, oldest first.
+
+        The range is pushed down to Firestore rather than filtered here.
+        Reading the whole collection and discarding most of it meant
+        looking at today cost more every week the shop stayed open -
+        a page that got slower forever while doing the same work.
+
+        Dates are stored in one canonical format (see normalize_time), so
+        an ordered string comparison is a correct date comparison, which
+        is what lets this be a simple indexed range query.
+        """
+        query = self._col(store_id, "sales")
+        if start:
+            query = query.where("date", ">=", start)
+        if end:
+            query = query.where("date", "<=", end)
+        # Ordered by Firestore too - the range query already walks the
+        # index in this order, so sorting again in Python would be work
+        # for nothing.
+        query = query.order_by("date")
+        return [d.to_dict() or {} for d in query.stream()]
 
     def has_backfilled_sales(self, store_id: str) -> bool:
         doc = self._col(store_id, "sync_state").document("backfill").get()

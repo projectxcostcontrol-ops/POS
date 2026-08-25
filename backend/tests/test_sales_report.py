@@ -205,6 +205,45 @@ def sample_sales():
     ]
 
 
+def test_list_sales_only_reads_the_window_asked_for():
+    section("A date range is filtered by the database, not after the fact")
+    # Reading the whole collection and discarding most of it meant looking
+    # at today got slower every week the shop stayed open - the same
+    # question costing more forever. The fake query enforces the same
+    # operators the real client does, so this test fails if the range
+    # stops being pushed down.
+    store = make_test_store()
+    for name, when in [("old", "2026-07-01T10:00:00.000Z"),
+                       ("mid", "2026-08-15T10:00:00.000Z"),
+                       ("new", "2026-08-30T10:00:00.000Z")]:
+        store.save_sale("branch1", name,
+                        {"receipt_number": name, "date": when, "total": 10, "items": []})
+
+    window = store.list_sales("branch1",
+                              "2026-08-10T00:00:00.000Z", "2026-08-20T00:00:00.000Z")
+    check("only the sale inside the window", [r["receipt_number"] for r in window], ["mid"])
+
+    check("an open-ended start still bounds the other side",
+          [r["receipt_number"] for r in
+           store.list_sales("branch1", "2026-08-10T00:00:00.000Z")], ["mid", "new"])
+
+    check("no window returns everything, oldest first",
+          [r["receipt_number"] for r in store.list_sales("branch1")],
+          ["old", "mid", "new"])
+
+
+def test_all_recipes_reads_the_book_once():
+    section("Recipes come back in one read, not one per dish")
+    store = make_test_store()
+    store.set_recipe("branch1", "ผัดไท", [{"material_id": "m1", "qty": 0.1}])
+    store.set_recipe("branch1", "ข้าวผัด", [{"material_id": "m2", "qty": 0.2}])
+
+    book = store.all_recipes("branch1")
+    check("both recipes returned", sorted(book.keys()), ["ข้าวผัด", "ผัดไท"])
+    check("ingredients intact", book["ผัดไท"][0]["qty"], 0.1)
+    check("a branch with none gets an empty book", store.all_recipes("branch2"), {})
+
+
 def test_summary_totals_and_bill_count():
     section("The headline figures")
     out = sales_report.summarise(sample_sales(), {}, [])
@@ -426,6 +465,8 @@ def main():
     test_first_run_saves_history_without_deducting_stock()
     test_the_full_history_pull_happens_only_once()
     test_a_repair_run_can_be_forced_on_an_established_branch()
+    test_list_sales_only_reads_the_window_asked_for()
+    test_all_recipes_reads_the_book_once()
     test_summary_totals_and_bill_count()
     test_a_refund_subtracts_instead_of_adding()
     test_refunds_do_not_return_stock()

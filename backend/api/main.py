@@ -724,42 +724,53 @@ def _window(from_: str | None, to: str | None) -> tuple[str, str]:
 
 
 def _recipes_for(c: Ctx, store_id: str, sales: list[dict]) -> dict:
-    """Only the menus that actually sold in this window - fetching every
-    recipe would cost a read per menu on a store that may have hundreds."""
+    """Recipes for the menus that sold in this window.
+
+    Fetched as one collection read rather than a lookup per dish. The
+    per-dish version cost a round trip for every distinct menu on the
+    receipt list, which on a varied day was dozens of reads to answer a
+    single screen."""
     names = {i.get("name") for s in sales for i in s.get("items", []) if i.get("name")}
-    return {n: c.store.get_recipe(store_id, n) for n in names}
+    if not names:
+        return {}
+    all_recipes = c.store.all_recipes(store_id)
+    return {n: all_recipes.get(n, []) for n in names}
 
 
-@app.get("/api/{store_id}/sales/summary")
-def sales_summary(store_id: str, from_: str | None = None, to: str | None = None,
-                  granularity: str = "day", tz_offset: int = 0,
-                  c: Ctx = Depends(store_money)):
-    """`tz_offset` is minutes ahead of UTC (Bangkok = 420). Chart buckets
-    follow the shop's clock, not the server's - see _bucket_key."""
+@app.get("/api/{store_id}/sales/overview")
+def sales_overview(store_id: str, from_: str | None = None, to: str | None = None,
+                   granularity: str = "day", tz_offset: int = 0, top: int = 5,
+                   c: Ctx = Depends(store_money)):
+    """Everything the sales screens show, from one read of the data.
+
+    The summary, the chart and the best-sellers used to be three
+    endpoints, and the page called all three at once - so the same window
+    of sales was read from Firestore twice over, plus the comparison
+    window again. On a busy month that was thousands of documents fetched
+    to answer one screen.
+
+    `tz_offset` is minutes ahead of UTC (Bangkok = 420); chart buckets
+    follow the shop's clock, not the server's - see _bucket_key.
+    """
     start, end = _window(from_, to)
     sales = c.store.list_sales(store_id, start, end)
     materials = c.store.list_materials(store_id)
+    recipes = _recipes_for(c, store_id, sales)
 
-    current = sales_report.summarise(
-        sales, _recipes_for(c, store_id, sales), materials, granularity, tz_offset)
+    current = sales_report.summarise(sales, recipes, materials, granularity, tz_offset)
 
-    # Compare against the equally-long window just before, so the headline
-    # figure means something on its own.
+    # The comparison only needs a total, so it skips the recipe lookups
+    # and material costing that the current window does.
     p_start, p_end = sales_report.previous_window(start, end)
-    prev_sales = c.store.list_sales(store_id, p_start, p_end)
     previous = sales_report.summarise(
-        prev_sales, _recipes_for(c, store_id, prev_sales), materials, granularity, tz_offset)
+        c.store.list_sales(store_id, p_start, p_end), {}, [], granularity, tz_offset)
 
-    return {**current,
-            "from": start, "to": end, "granularity": granularity,
-            "compare": sales_report.compare_previous(current, previous)}
-
-
-@app.get("/api/{store_id}/sales/top-items")
-def sales_top_items(store_id: str, from_: str | None = None, to: str | None = None,
-                    limit: int = 5, c: Ctx = Depends(store_money)):
-    start, end = _window(from_, to)
-    return sales_report.top_items(c.store.list_sales(store_id, start, end), limit)
+    return {
+        **current,
+        "from": start, "to": end, "granularity": granularity,
+        "compare": sales_report.compare_previous(current, previous),
+        "top_items": sales_report.top_items(sales, top),
+    }
 
 
 @app.get("/api/{store_id}/sales/daily")

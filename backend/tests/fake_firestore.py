@@ -66,14 +66,10 @@ class FakeCollection:
         return FakeDocRef(self, doc_id)
 
     def where(self, field, op, value):
-        parent = self
+        return FakeQuery(self).where(field, op, value)
 
-        class Filtered:
-            def stream(self):
-                return [FakeDoc(i, d) for i, d in parent._docs().items()
-                        if d.get(field) == value]
-
-        return Filtered()
+    def order_by(self, field, direction="ASCENDING"):
+        return FakeQuery(self).order_by(field, direction)
 
     def stream(self):
         return [FakeDoc(i, d) for i, d in self._docs().items()]
@@ -93,6 +89,49 @@ class FakeBatch:
         for doc_ref, data, merge in self._ops:
             doc_ref.set(data, merge=merge)
         self._ops = []
+
+
+class FakeQuery:
+    """Chainable where/order_by, matching the real client.
+
+    The earlier stand-in accepted any operator and compared with == , so
+    a range query in production behaved nothing like the same call in a
+    test - the tests would pass while the code was wrong. A fake that
+    lies about the thing it stands in for is worse than no fake."""
+
+    OPS = {
+        "==": lambda a, b: a == b,
+        "!=": lambda a, b: a != b,
+        ">": lambda a, b: a is not None and a > b,
+        ">=": lambda a, b: a is not None and a >= b,
+        "<": lambda a, b: a is not None and a < b,
+        "<=": lambda a, b: a is not None and a <= b,
+        "in": lambda a, b: a in b,
+    }
+
+    def __init__(self, collection, filters=None, order=None):
+        self._col = collection
+        self._filters = list(filters or [])
+        self._order = order
+
+    def where(self, field, op, value):
+        if op not in self.OPS:
+            raise ValueError(f"unsupported operator in fake: {op!r}")
+        return FakeQuery(self._col, self._filters + [(field, op, value)], self._order)
+
+    def order_by(self, field, direction="ASCENDING"):
+        return FakeQuery(self._col, self._filters, (field, direction))
+
+    def stream(self):
+        rows = [(i, d) for i, d in self._col._docs().items()]
+        for field, op, value in self._filters:
+            test = self.OPS[op]
+            rows = [(i, d) for i, d in rows if test(d.get(field), value)]
+        if self._order:
+            field, direction = self._order
+            rows.sort(key=lambda r: (r[1].get(field) is None, r[1].get(field)),
+                      reverse=(direction == "DESCENDING"))
+        return [FakeDoc(i, d) for i, d in rows]
 
 
 class FakeDb:
