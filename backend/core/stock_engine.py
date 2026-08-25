@@ -62,7 +62,8 @@ def sync_branch(provider: PosProvider, store: Store, store_id: str,
     since = None if first_run else _minus_seconds(cursor, overlap_seconds)
     receipts = provider.get_receipts(store_id, created_at_min=since)
 
-    result = _apply(store, store_id, receipts, deduct_stock=not first_run)
+    result = _apply(store, store_id, receipts,
+                    deduct_stock=not first_run, rewrite_all=full)
 
     # The cursor follows the newest arrival time we actually saw, not the
     # wall clock. Wall-clock time is a guess about when receipts show up;
@@ -78,34 +79,66 @@ def sync_branch(provider: PosProvider, store: Store, store_id: str,
 
 
 def _apply(store: Store, store_id: str, receipts: list[dict],
-           deduct_stock: bool) -> dict:
-    """Save every receipt; deduct stock for the ones not yet counted.
+           deduct_stock: bool, rewrite_all: bool = False) -> dict:
+    """Save what's new; deduct stock for the receipts not yet counted.
 
     Saving and deducting answer different questions and are deliberately
     separate. "Processed" means stock has already moved and must not move
-    twice. Saving is just a record, and re-saving overwrites harmlessly -
-    so a receipt that was already processed still gets its copy kept,
-    which is what stops gaps appearing everywhere the overlap window lands.
+    twice. Saving is just a record of what sold.
+
+    A receipt already marked processed does NOT get re-saved, because it
+    is already saved. That holds as an invariant, not a hope: on every
+    path through this function the save happens BEFORE the mark, so a
+    crash in between leaves the receipt unmarked and the next sync
+    redoes both. Marked therefore implies saved.
+
+    Re-saving them anyway is what the previous version did, and it was
+    not free. The cursor is deliberately rewound six hours on every sync
+    (see SYNC_OVERLAP_SECONDS) so that receipts from a till that was
+    offline are never missed - which meant every five minutes the branch
+    rewrote every bill of the last six hours, unchanged. Roughly seven
+    thousand writes a day, per branch, to store exactly what was already
+    stored, against a free quota of twenty thousand.
+
+    `rewrite_all` (from sync's `full=True`) still rewrites everything.
+    That's what the repair is for: the one case this optimisation must
+    not cover is a saved row that is wrong, missing, or written by an
+    older version before a field existed. Repair is the tool for that,
+    and it has to be able to overwrite what a normal sync now skips.
 
     On a first run stock is NOT deducted: those sales happened before the
     branch had recipes, so deducting them would invent a shortage against
     ingredients nobody was tracking.
     """
-    already = store.list_processed_receipts(store_id)
+    already = store.processed_receipts_among(
+        store_id, [r.get("receipt_number") for r in receipts])
 
     sales_rows = []
     to_mark = []
+    deductions = []
     deducted = 0
     skipped_refunds = 0
+    unknown_materials = set()
+
+    # Both loaded at most once, and only if there is actually stock to
+    # deduct. The recipe book used to be fetched per line item - a read
+    # for every dish on every bill, to answer a question whose answer is
+    # the same all sync - and the material list is what keeps a recipe
+    # pointing at a deleted ingredient from writing a movement against
+    # something that no longer exists.
+    recipes = None
+    known_materials = None
 
     for receipt in receipts:
         number = receipt.get("receipt_number")
         if not number:
             continue
 
-        sales_rows.append((number, _sale_row(receipt)))
+        seen = number in already
+        if rewrite_all or not seen:
+            sales_rows.append((number, _sale_row(receipt)))
 
-        if number in already:
+        if seen:
             continue
 
         if not deduct_stock:
@@ -121,11 +154,25 @@ def _apply(store: Store, store_id: str, receipts: list[dict],
             skipped_refunds += 1
             continue
 
+        if recipes is None:
+            recipes = store.all_recipes(store_id)
+            known_materials = set(store.list_material_ids(store_id))
+
         for line in receipt.get("line_items", []):
-            for ing in store.get_recipe(store_id, line.get("item_name")):
-                store.deduct_stock(store_id, ing["material_id"],
-                                   ing["qty"] * (line.get("quantity") or 0),
-                                   ref=f"receipt:{number}")
+            for ing in recipes.get(line.get("item_name")) or []:
+                material_id = ing.get("material_id")
+                if material_id not in known_materials:
+                    # The ingredient was deleted but a recipe still names
+                    # it. Skipping keeps the rest of the bill deducting;
+                    # collecting the name means it gets reported instead
+                    # of quietly going missing.
+                    unknown_materials.add(material_id)
+                    continue
+                deductions.append({
+                    "material_id": material_id,
+                    "quantity": (ing.get("qty") or 0) * (line.get("quantity") or 0),
+                    "ref": f"receipt:{number}",
+                })
         to_mark.append(number)
         deducted += 1
 
@@ -133,6 +180,11 @@ def _apply(store: Store, store_id: str, receipts: list[dict],
     # out on a first sync of several thousand.
     if sales_rows:
         store.save_sales_bulk(store_id, sales_rows)
+    if deductions:
+        store.deduct_stock_bulk(store_id, deductions)
+    # Marked last, always: a crash before this point leaves the receipts
+    # unmarked and the next sync redoes the work, which is the safe way
+    # round. Marking first would lose the deduction for good.
     if to_mark:
         store.mark_receipts_processed_bulk(store_id, to_mark)
 
@@ -141,6 +193,9 @@ def _apply(store: Store, store_id: str, receipts: list[dict],
         "deducted": deducted,
         "already_counted": len(receipts) - len(to_mark),
         "refunds": skipped_refunds,
+        # Named rather than counted: "2 ingredients missing" gives nobody
+        # anything to do about it.
+        "unknown_materials": sorted(m for m in unknown_materials if m),
     }
 
 

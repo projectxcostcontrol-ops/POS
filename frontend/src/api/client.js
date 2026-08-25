@@ -70,6 +70,8 @@ export const api = {
     request(`/api/${storeId}/materials/${materialId}/waste?quantity=${quantity}&note=${encodeURIComponent(note)}`,
       { method: 'POST' }),
   migrateStock: (storeId) => request(`/api/${storeId}/migrate-stock`, { method: 'POST' }),
+  rebuildStockSnapshot: (storeId) =>
+    request(`/api/${storeId}/rebuild-stock-snapshot`, { method: 'POST' }),
 
   getReceivings: (storeId) => request(`/api/${storeId}/receivings`),
   addReceiving: (storeId, data) =>

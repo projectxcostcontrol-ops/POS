@@ -21,6 +21,8 @@ export default function Settings() {
   const [resettingCursor, setResettingCursor] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [migrateResult, setMigrateResult] = useState(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildResult, setRebuildResult] = useState(null);
 
   async function runMigration() {
     if (!storeId) return;
@@ -32,6 +34,19 @@ export default function Settings() {
       setConnectError(`ย้ายข้อมูลไม่สำเร็จ: ${e.message}`);
     } finally {
       setMigrating(false);
+    }
+  }
+
+  async function runRebuild() {
+    if (!storeId) return;
+    setRebuilding(true);
+    setRebuildResult(null);
+    try {
+      setRebuildResult(await api.rebuildStockSnapshot(storeId));
+    } catch (e) {
+      setConnectError(`คำนวณใหม่ไม่สำเร็จ: ${e.message}`);
+    } finally {
+      setRebuilding(false);
     }
   }
 
@@ -243,6 +258,27 @@ export default function Settings() {
         {migrateResult && (
           <p style={{ fontSize: 12, color: 'var(--text-success)', marginTop: 8 }}>
             ย้ายแล้ว {migrateResult.migrated_materials} รายการ
+          </p>
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>คำนวณยอดคงเหลือใหม่</p>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          รวมยอดคงเหลือและต้นทุนเฉลี่ยของวัตถุดิบทุกตัวใหม่จากประวัติการเคลื่อนไหวทั้งหมด
+          ทำให้หน้า “ของในครัว” เปิดเร็วขึ้นมาก และใช้ตรวจได้ว่าตัวเลขที่เห็นตรงกับประวัติจริง
+          กดซ้ำได้ ไม่ทำให้ข้อมูลเพี้ยน
+        </p>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
+          ควรกดตอนร้านไม่ยุ่ง — ถ้ามีบิลเข้ามาพอดีจังหวะที่กำลังคำนวณ ยอดของวัตถุดิบตัวนั้น
+          อาจคลาดไปหนึ่งบิล กดซ้ำอีกครั้ง (หรือรอบนับสต๊อกถัดไป) จะตรงเอง
+        </p>
+        <button onClick={runRebuild} disabled={rebuilding || !storeId}>
+          {rebuilding ? 'กำลังคำนวณ...' : 'คำนวณยอดคงเหลือใหม่'}
+        </button>
+        {rebuildResult && (
+          <p style={{ fontSize: 12, color: 'var(--text-success)', marginTop: 8 }}>
+            คำนวณใหม่แล้ว {rebuildResult.rebuilt_materials} รายการ
           </p>
         )}
       </div>

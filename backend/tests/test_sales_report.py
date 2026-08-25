@@ -97,19 +97,39 @@ def test_resyncing_the_same_receipt_does_not_double_count():
     check("and one total, not doubled", saved[0]["total"], 250)
 
 
-def test_an_already_processed_receipt_is_still_saved():
-    section("A receipt whose stock was already deducted is still recorded as a sale")
-    # "Processed" (don't deduct stock twice) and "saved" (keep a record)
-    # answer different questions. Skipping the save for processed receipts
-    # would leave gaps everywhere the overlap window landed.
+def test_a_processed_but_unsaved_receipt_is_recovered_by_repair():
+    section("A bill marked processed but never saved is recovered - by repair, not by a normal sync")
+    # This state is legacy data: branches that synced before the `sales`
+    # collection existed marked their receipts processed and saved
+    # nothing. It cannot arise from today's code, because _apply saves
+    # BEFORE it marks, so a crash between the two leaves the receipt
+    # unmarked and the next sync redoes both.
+    #
+    # A normal sync used to re-save every receipt it fetched, which
+    # papered over this - and cost roughly 7,000 pointless writes a day
+    # per branch to do it, since the six-hour overlap window meant
+    # rewriting the same bills every five minutes (see
+    # tests/test_sync_cost.py). It also only ever healed the handful of
+    # legacy rows that happened to fall inside that window; anything
+    # older was untouched either way.
+    #
+    # So the healing now runs where it was always designed to run: the
+    # home screen's "อัปเดตข้อมูล" button syncs, reconciles POS against
+    # saved, and calls repair when it finds a gap. Both halves are
+    # asserted here, because dropping the first without the second would
+    # be losing history to save writes.
     store = make_test_store()
     r = receipt("1-1001", "2026-08-24T10:00:00+00:00", 250, [("ผัดไท", 2, 70)])
     store.mark_receipt_processed("branch1", "1-1001")
 
     store.set_sync_cursor("branch1", "2026-01-01T00:00:00.000Z")
     sync_branch(FakeProvider([r]), store, "branch1")
+    check("a normal sync leaves the gap alone", len(store.list_sales("branch1")), 0)
 
-    check("the sale was recorded anyway", len(store.list_sales("branch1")), 1)
+    sync_branch(FakeProvider([r]), store, "branch1", full=True)
+    saved = store.list_sales("branch1")
+    check("repair recovers it", len(saved), 1)
+    check("with its real total", saved[0]["total"], 250)
 
 
 def test_stock_is_not_deducted_twice_for_the_same_receipt():
@@ -128,7 +148,11 @@ def test_stock_is_not_deducted_twice_for_the_same_receipt():
 
     check("deducted once", first["deducted"], 1)
     check("second pass deducts nothing", second["deducted"], 0)
-    check("but the receipt is still saved again", second["saved"], 1)
+    # It was already saved on the first pass, and saving happens before
+    # marking - so "already processed" implies "already stored", and
+    # writing it a second time would buy nothing.
+    check("and it is not written a second time", second["saved"], 0)
+    check("the stored copy is still there", len(store.list_sales("branch1")), 1)
     check("and reported as already counted", second["already_counted"], 1)
 
 
@@ -460,7 +484,7 @@ def main():
 
     test_sales_are_saved_as_receipts_sync()
     test_resyncing_the_same_receipt_does_not_double_count()
-    test_an_already_processed_receipt_is_still_saved()
+    test_a_processed_but_unsaved_receipt_is_recovered_by_repair()
     test_stock_is_not_deducted_twice_for_the_same_receipt()
     test_first_run_saves_history_without_deducting_stock()
     test_the_full_history_pull_happens_only_once()

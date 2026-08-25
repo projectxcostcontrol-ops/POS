@@ -154,26 +154,108 @@ class Store:
     # describe the material itself: name, unit, par level, and (for new
     # materials with no deliveries yet) a fallback cost.
 
+    # ---- derived stock snapshot -------------------------------------
+    # Kept on the material doc, maintained by MovementLedger inside the
+    # same batch as the movement it comes from. See that module for why.
+
+    SNAPSHOT_FIELDS = ("stock_qty", "recv_qty", "recv_value")
+
+    def increment(self, value):
+        """An atomic add for a numeric field.
+
+        Asked of the database rather than imported from the SDK, so the
+        in-memory test double can supply its own and the tests exercise
+        the same write path production takes instead of a simpler one."""
+        factory = getattr(self.db, "increment", None)
+        if factory is not None:
+            return factory(value)
+        from google.cloud import firestore
+        return firestore.Increment(value)
+
+    def material_ref(self, store_id: str, material_id: str):
+        return self._col(store_id, "materials").document(material_id)
+
+    def material_snapshot(self, store_id: str, material_id: str) -> dict | None:
+        doc = self.material_ref(store_id, material_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    def set_material_snapshot(self, store_id: str, material_id: str, totals: dict):
+        self.material_ref(store_id, material_id).set(
+            {k: totals.get(k, 0) for k in self.SNAPSHOT_FIELDS}, merge=True)
+
+    def list_material_ids(self, store_id: str) -> list[str]:
+        return [d.id for d in self._col(store_id, "materials").stream()]
+
     def list_materials(self, store_id: str) -> list[dict]:
-        """Materials with their current stock and cost filled in from the ledger."""
+        """Materials with their current stock and cost filled in.
+
+        Both numbers come off the snapshot on each material doc, so this
+        is one read per material and nothing else. It used to sum the
+        whole movement ledger for the stock figure and then run a second
+        query PER MATERIAL for the average cost - which on a branch a
+        year in meant six figures of document reads to draw a list of
+        two dozen ingredients, on the screen staff open most often.
+
+        A branch whose materials predate the snapshot has no totals to
+        read, so it falls back to the ledger: slower, but never wrong.
+        Rebuilding (Settings, or the rebuild endpoint) moves it onto the
+        fast path permanently.
+        """
+        docs = [(d.id, d.to_dict() or {}) for d in self._col(store_id, "materials").stream()]
+        needs_rebuild = any("stock_qty" not in data for _, data in docs)
+
+        if needs_rebuild:
+            return self._list_materials_from_ledger(docs, store_id)
+
+        materials = []
+        for material_id, data in docs:
+            mat = data | {"id": material_id}
+            mat["stock"] = data.get("stock_qty") or 0
+            recv_qty = data.get("recv_qty") or 0
+            if recv_qty > 0:
+                mat["cost"] = (data.get("recv_value") or 0) / recv_qty
+            mat["snapshot"] = True
+            materials.append(mat)
+        return materials
+
+    def _list_materials_from_ledger(self, docs: list[tuple[str, dict]],
+                                    store_id: str) -> list[dict]:
+        """The pre-snapshot path, kept as the fallback rather than deleted.
+
+        A branch that hasn't been rebuilt yet must still show correct
+        numbers - being slow is a cost, being wrong about how much stock
+        is on the shelf is a different kind of problem entirely."""
         from storage.movement_ledger import MovementLedger
         ledger = MovementLedger(self)
         stock_by_id = ledger.all_current_stock(store_id)
 
         materials = []
-        for d in self._col(store_id, "materials").stream():
-            mat = d.to_dict() | {"id": d.id}
-            mat["stock"] = stock_by_id.get(d.id, 0)
-            ledger_cost = ledger.average_cost(store_id, d.id)
+        for material_id, data in docs:
+            mat = data | {"id": material_id}
+            mat["stock"] = stock_by_id.get(material_id, 0)
+            ledger_cost = ledger.average_cost(store_id, material_id)
             if ledger_cost is not None:
                 mat["cost"] = ledger_cost
+            mat["snapshot"] = False
             materials.append(mat)
         return materials
 
     def upsert_material(self, store_id: str, material_id: str, data: dict):
         """Stock never comes in through here - use the ledger for that, so
-        every change to stock has a recorded reason."""
-        data = {k: v for k, v in data.items() if k != "stock"}
+        every change to stock has a recorded reason. The derived totals
+        are refused for the same reason, and more bluntly: they are the
+        ledger's arithmetic, and letting a request set them would make
+        them a second, editable copy of the truth."""
+        blocked = {"stock", *self.SNAPSHOT_FIELDS}
+        data = {k: v for k, v in data.items() if k not in blocked}
+
+        # Increment-by-zero creates the field at 0 on a brand new material
+        # and leaves an existing one untouched - so a new ingredient joins
+        # the fast path immediately, and editing a name never resets what
+        # is on the shelf.
+        for field in self.SNAPSHOT_FIELDS:
+            data.setdefault(field, self.increment(0))
+
         self._col(store_id, "materials").document(material_id).set(data, merge=True)
 
     def migrate_stock_to_ledger(self, store_id: str) -> int:
@@ -245,6 +327,14 @@ class Store:
                      ref: str | None = None):
         from storage.movement_ledger import MovementLedger
         MovementLedger(self).record_sale(store_id, material_id, amount, ref=ref)
+
+    def deduct_stock_bulk(self, store_id: str, rows: list[dict]) -> int:
+        """rows: [{material_id, quantity, ref}]. What a sync uses - see
+        MovementLedger.record_sales_bulk."""
+        if not rows:
+            return 0
+        from storage.movement_ledger import MovementLedger
+        return MovementLedger(self).record_sales_bulk(store_id, rows)
 
     def receive_stock(self, store_id: str, material_id: str, quantity: float,
                       unit_cost: float, note: str = "", occurred_at: str | None = None,
@@ -489,13 +579,39 @@ class Store:
                 batch.set(col.document(number), {"processed": True})
             batch.commit()
 
-    def list_processed_receipts(self, store_id: str) -> set[str]:
-        """All processed receipt numbers at once.
+    def processed_receipts_among(self, store_id: str,
+                                 numbers: list[str]) -> set[str]:
+        """Which of THESE receipt numbers have already been processed.
 
-        Checking them one at a time meant a read per receipt; a sync of
-        500 bills spent 500 round trips just asking "have I seen this
-        one". One read answers it for all of them."""
-        return {d.id for d in self._col(store_id, "processed_receipts").stream()}
+        Deliberately not "all of them". The previous version read the
+        entire processed_receipts collection on every sync, which is a
+        collection that only ever grows: it holds one document per bill
+        the branch has ever rung up, forever. A shop doing 100 bills a
+        day has 36,000 of them after a year, and the automatic sync runs
+        every five minutes - so answering "have I seen these 25 bills"
+        cost ten million document reads a day, against a free quota of
+        fifty thousand. The answer was correct and the bill was ruinous,
+        which is the kind of bug no test about the ANSWER can catch (see
+        tests/test_sync_cost.py, which asserts the cost instead).
+
+        A sync only ever asks about the receipts it just fetched, so
+        that's what this reads: one batched get of exactly those ids.
+        Cost now follows how busy the last few hours were, not how long
+        the shop has been open.
+        """
+        col = self._col(store_id, "processed_receipts")
+        wanted = [n for n in numbers if n]
+        found: set[str] = set()
+        # get_all takes a list of refs in one round trip. Chunked because
+        # a single request still has a size ceiling, and a full repair can
+        # ask about thousands at once.
+        CHUNK = 300
+        for i in range(0, len(wanted), CHUNK):
+            refs = [col.document(n) for n in wanted[i:i + CHUNK]]
+            for snap in self.db.get_all(refs):
+                if snap.exists:
+                    found.add(snap.id)
+        return found
 
     def list_sales(self, store_id: str, start: str | None = None,
                    end: str | None = None) -> list[dict]:

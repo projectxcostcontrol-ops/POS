@@ -410,6 +410,23 @@ def migrate_stock(store_id: str, c: Ctx = Depends(store_settings)):
     return {"migrated_materials": c.store.migrate_stock_to_ledger(store_id)}
 
 
+@app.post("/api/{store_id}/rebuild-stock-snapshot")
+def rebuild_stock_snapshot(store_id: str, c: Ctx = Depends(store_settings)):
+    """Recompute each material's running stock and cost totals from the
+    ledger.
+
+    Needed once per branch whose materials predate those totals - until
+    then the stock page still shows correct figures, it just pays for
+    them by summing the whole movement history on every visit. Afterwards
+    this stays available as the way to check the fast numbers against the
+    ledger they came from, rather than having to trust them.
+
+    Best run while the branch is quiet: it writes totals read a moment
+    earlier, so a sale landing in between is overwritten and needs
+    another run (or the next stock count) to settle."""
+    return {"rebuilt_materials": c.ledger.rebuild_snapshots(store_id)}
+
+
 # ---- receiving ---------------------------------------------------------
 
 @app.get("/api/{store_id}/receivings")
@@ -946,16 +963,19 @@ def close_count(store_id: str, session_id: str, c: Ctx = Depends(store_ctx)):
 
     closed_at = _now()
     for material_id, counted in entries.items():
-        c.ledger.record_count(store_id, material_id, float(counted),
-                              note=f"รอบนับ {closed_at[:10]}")
+        movement = c.ledger.record_count(store_id, material_id, float(counted),
+                                         note=f"รอบนับ {closed_at[:10]}")
         # Tag it so variance can tell this count's correction from any
         # other adjustment made on the same day.
-        movements = c.ledger.list_movements(store_id, material_id)
-        if movements:
-            latest = movements[0]
-            c.store._col(store_id, "stock_movements").document(latest["id"]).update({
-                "ref": session_id, "occurred_at": closed_at,
-            })
+        #
+        # The id comes back from the write. Re-reading the material's
+        # whole movement history to find the row we had just written was
+        # a query per counted ingredient, and it identified the movement
+        # by "newest first" - which is a guess, not a fact, when two
+        # things are written in the same second.
+        c.store._col(store_id, "stock_movements").document(movement["id"]).update({
+            "ref": session_id, "occurred_at": closed_at,
+        })
 
     c.store.close_count_session(store_id, session_id, closed_at)
     return {"ok": True, "counted": len(entries), "closed_at": closed_at}

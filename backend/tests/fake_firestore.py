@@ -9,6 +9,31 @@ dict, so a document under one tenant can't be reached from another.
 """
 
 
+class FakeIncrement:
+    """Stands in for firestore.Increment.
+
+    Atomic add, applied server-side. Two important behaviours the code
+    under test relies on, both mirrored here: incrementing a field that
+    does not exist yet creates it at the increment value, and two
+    increments never lose each other the way a read-modify-write does.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+def _apply_increments(current: dict, data: dict) -> dict:
+    out = {}
+    for k, v in data.items():
+        if isinstance(v, FakeIncrement):
+            out[k] = (current.get(k) or 0) + v.value
+        else:
+            out[k] = v
+    return out
+
+
 class FakeDoc:
     def __init__(self, doc_id, data):
         self.id = doc_id
@@ -28,42 +53,66 @@ class FakeDocRef:
         self.id = doc_id
 
     def set(self, data, merge=False):
-        current = self._col._docs().get(self.id, {}) if merge else {}
-        current.update(data)
+        self._col.count("writes")
+        stored = self._col._docs().get(self.id, {})
+        current = dict(stored) if merge else {}
+        current.update(_apply_increments(stored, data))
         self._col._docs()[self.id] = current
 
     def update(self, data):
-        self._col._docs().setdefault(self.id, {}).update(data)
+        self._col.count("writes")
+        stored = self._col._docs().setdefault(self.id, {})
+        stored.update(_apply_increments(stored, data))
 
     def get(self):
+        self._col.count("reads")
         return FakeDoc(self.id, self._col._docs().get(self.id, {}))
 
     def delete(self):
+        self._col.count("deletes")
         self._col._docs().pop(self.id, None)
 
     def collection(self, sub_name):
-        return FakeCollection(self._col.storage, f"{self._col.name}/{self.id}/{sub_name}")
+        return FakeCollection(self._col.storage, f"{self._col.name}/{self.id}/{sub_name}",
+                              meter=self._col.meter)
 
 
 class FakeCollection:
-    def __init__(self, storage, name):
+    def __init__(self, storage, name, meter=None):
         self.storage = storage
         self.name = name
+        self.meter = meter if meter is not None else {}
+
+    def count(self, kind, n=1):
+        """Firestore bills per DOCUMENT touched, not per call, so that's
+        what gets counted here."""
+        self.meter[kind] = self.meter.get(kind, 0) + n
 
     def _docs(self):
         return self.storage.setdefault(self.name, {})
 
+
+
+    def _new_id(self):
+        """Auto-ids must not be reused after a delete, the way real ones
+        aren't - a recycled id would let a deleted movement's slot be
+        silently overwritten by the next one."""
+        self.storage.setdefault("__ids__", {})
+        n = self.storage["__ids__"].get(self.name, 0)
+        self.storage["__ids__"][self.name] = n + 1
+        return f"doc{n}"
+
     def add(self, entry):
-        doc_id = f"doc{len(self._docs())}"
+        self.count("writes")
+        doc_id = self._new_id()
         self._docs()[doc_id] = dict(entry)
+        return None, FakeDocRef(self, doc_id)
 
-        class Ref:
-            id = doc_id
-
-        return None, Ref()
-
-    def document(self, doc_id):
-        return FakeDocRef(self, doc_id)
+    def document(self, doc_id=None):
+        """No id means "give me a fresh one", as on the real client - which
+        is what lets a document be created inside a batch alongside other
+        writes instead of needing its own round trip first."""
+        return FakeDocRef(self, doc_id if doc_id is not None else self._new_id())
 
     def where(self, field, op, value):
         return FakeQuery(self).where(field, op, value)
@@ -72,7 +121,9 @@ class FakeCollection:
         return FakeQuery(self).order_by(field, direction)
 
     def stream(self):
-        return [FakeDoc(i, d) for i, d in self._docs().items()]
+        docs = self._docs()
+        self.count("reads", len(docs))
+        return [FakeDoc(i, d) for i, d in docs.items()]
 
 
 class FakeBatch:
@@ -83,11 +134,17 @@ class FakeBatch:
         self._ops = []
 
     def set(self, doc_ref, data, merge=False):
-        self._ops.append((doc_ref, data, merge))
+        self._ops.append(("set", doc_ref, data, merge))
+
+    def update(self, doc_ref, data):
+        self._ops.append(("update", doc_ref, data, None))
 
     def commit(self):
-        for doc_ref, data, merge in self._ops:
-            doc_ref.set(data, merge=merge)
+        for op, doc_ref, data, merge in self._ops:
+            if op == "set":
+                doc_ref.set(data, merge=merge)
+            else:
+                doc_ref.update(data)
         self._ops = []
 
 
@@ -131,6 +188,7 @@ class FakeQuery:
             field, direction = self._order
             rows.sort(key=lambda r: (r[1].get(field) is None, r[1].get(field)),
                       reverse=(direction == "DESCENDING"))
+        self._col.count("reads", len(rows))
         return [FakeDoc(i, d) for i, d in rows]
 
 
@@ -140,12 +198,41 @@ class FakeDb:
 
     def __init__(self):
         self.storage = {}
+        self.meter = {}
 
     def collection(self, name):
-        return FakeCollection(self.storage, name)
+        return FakeCollection(self.storage, name, meter=self.meter)
 
     def batch(self):
         return FakeBatch()
+
+    def increment(self, value):
+        """Store asks the db for this rather than importing the SDK, so a
+        test never needs google-cloud-firestore installed to exercise the
+        same write path production takes."""
+        return FakeIncrement(value)
+
+    def get_all(self, references):
+        """Batch document fetch, as on the real client.
+
+        Returns a snapshot for every reference including the ones that
+        don't exist - which is the whole point: asking "which of these 25
+        receipts have I already seen" must cost 25 reads, not the size of
+        the collection.
+        """
+        return [ref.get() for ref in references]
+
+    # ---- test-side accounting ----
+    def reset_meter(self):
+        self.meter.clear()
+
+    @property
+    def reads(self):
+        return self.meter.get("reads", 0)
+
+    @property
+    def writes(self):
+        return self.meter.get("writes", 0)
 
 
 def make_test_store(tenant_id: str = "t1", db=None):
