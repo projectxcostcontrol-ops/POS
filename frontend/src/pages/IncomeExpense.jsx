@@ -15,14 +15,19 @@ export default function IncomeExpense() {
   const [receipts, setReceipts] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [recipes, setRecipes] = useState({});
-  const [expenses, setExpenses] = useState({ fixed: [], variable: [], material: [] });
+  const [expenses, setExpenses] = useState({ fixed: [], variable: [] });
+  const [receivings, setReceivings] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
 
   useEffect(() => {
     if (!storeId) return;
     api.getReceipts(storeId).then(setReceipts);
     api.getMaterials(storeId).then(setMaterials);
-    ['fixed', 'variable', 'material'].forEach((c) =>
+    // Deliveries ARE the raw-material spend. The old code read an
+    // expenses category called "material" that nothing ever wrote to, so
+    // this line always came out ฿0 and net profit read far too high.
+    api.getReceivings(storeId).then(setReceivings).catch(() => setReceivings([]));
+    ['fixed', 'variable'].forEach((c) =>
       api.getExpenses(storeId, c).then((list) => setExpenses((prev) => ({ ...prev, [c]: list }))));
   }, [storeId]);
 
@@ -58,10 +63,10 @@ export default function IncomeExpense() {
 
   const fixedInPeriod = expenses.fixed.filter((e) => inPeriod(e.date));
   const variableInPeriod = expenses.variable.filter((e) => inPeriod(e.date));
-  const materialInPeriod = expenses.material.filter((e) => inPeriod(e.date));
+  const materialInPeriod = receivings.filter((r) => inPeriod(r.date));
   const fixedSum = fixedInPeriod.reduce((s, e) => s + e.amount, 0);
   const variableSum = variableInPeriod.reduce((s, e) => s + e.amount, 0);
-  const materialSum = materialInPeriod.reduce((s, e) => s + e.amount, 0);
+  const materialSum = materialInPeriod.reduce((s, r) => s + (r.total || 0), 0);
   const totalExpense = fixedSum + variableSum + materialSum;
 
   async function saveExpense(form) {
@@ -74,7 +79,11 @@ export default function IncomeExpense() {
   const allExpenses = [
     ...fixedInPeriod.map((e) => ({ ...e, category: 'fixed' })),
     ...variableInPeriod.map((e) => ({ ...e, category: 'variable' })),
-    ...materialInPeriod.map((e) => ({ ...e, category: 'material' })),
+    ...materialInPeriod.map((r) => ({
+      id: r.id, category: 'material', date: r.date,
+      name: r.supplier ? `ซื้อของจาก ${r.supplier}` : 'ซื้อของเข้าร้าน',
+      amount: r.total || 0,
+    })),
   ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const isCurrentMonth = month !== '' && year === now.getFullYear() && parseInt(month) === now.getMonth();
 
@@ -98,10 +107,53 @@ export default function IncomeExpense() {
         <Stat label="ค่าใช้จ่ายรวม" value={totalExpense} />
         <Stat label="กำไรสุทธิ" value={income - totalExpense} color="var(--text-success)" />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 16 }}>
         <Stat label="ค่าใช้จ่ายคงที่" value={fixedSum} small />
         <Stat label="ค่าใช้จ่ายผันแปร" value={variableSum} small />
-        <Stat label="ค่าวัตถุดิบ" value={materialSum} small />
+      </div>
+
+      {/* Two ways of counting raw materials, side by side.
+          Only the first is in ค่าใช้จ่ายรวม above - it's money that
+          actually left the till this month. The second is what the
+          recipes say the food sold should have consumed. Adding both
+          would count the same ingredients twice; showing only one would
+          hide the more interesting number, which is the gap between them. */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12, marginBottom: 24 }}>
+        <div className="card" style={{ padding: '13px 14px' }}>
+          <p style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: 0 }}>
+            รายจ่ายวัตถุดิบจริง
+          </p>
+          <p style={{ fontSize: 10.5, color: 'var(--text-muted)', margin: '1px 0 6px' }}>
+            จากการบันทึกซื้อของ · นับในค่าใช้จ่ายรวม
+          </p>
+          <p style={{ fontSize: 21, fontWeight: 700, margin: 0, letterSpacing: -.3 }}>
+            ฿{materialSum.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </p>
+          <p style={{ fontSize: 10.5, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+            {materialInPeriod.length} ครั้ง
+          </p>
+        </div>
+
+        <div className="card" style={{ padding: '13px 14px' }}>
+          <p style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: 0 }}>
+            ต้นทุนตามสูตร
+          </p>
+          <p style={{ fontSize: 10.5, color: 'var(--text-muted)', margin: '1px 0 6px' }}>
+            คิดจากสูตร × ที่ขายไป · ไม่นับซ้ำในค่าใช้จ่ายรวม
+          </p>
+          <p style={{ fontSize: 21, fontWeight: 700, margin: 0, letterSpacing: -.3 }}>
+            ฿{materialCostByRecipe.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+          </p>
+          <p style={{
+            fontSize: 10.5, margin: '4px 0 0',
+            color: materialSum - materialCostByRecipe > 0
+              ? 'var(--text-warning)' : 'var(--text-muted)',
+          }}>
+            {materialSum >= materialCostByRecipe
+              ? `ซื้อมากกว่าที่ขายไป ฿${(materialSum - materialCostByRecipe).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+              : `ขายมากกว่าที่ซื้อ ฿${(materialCostByRecipe - materialSum).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+          </p>
+        </div>
       </div>
 
       {/* One list instead of three tabs. The categories were never
@@ -114,7 +166,7 @@ export default function IncomeExpense() {
           {isCurrentMonth && <button onClick={() => setShowAdd(true)}>+ บันทึกรายจ่าย</button>}
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          ค่าวัตถุดิบระบบคำนวณให้เองจากสูตร × ยอดขาย ไม่ต้องกรอก
+          ค่าวัตถุดิบมาจากหน้า "ซื้อของเข้าร้าน" อัตโนมัติ ไม่ต้องกรอกซ้ำ
         </p>
 
         {allExpenses.length === 0 && (
@@ -136,14 +188,10 @@ export default function IncomeExpense() {
         ))}
       </div>
 
-      <div className="stat-card" style={{ marginTop: 16 }}>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
-          เทียบยอดซื้อวัตถุดิบจริง กับต้นทุนตามสูตร
-        </p>
-        <Row label="ซื้อจริง" value={materialSum} />
-        <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />
-        <Row label="ส่วนต่าง" value={materialSum - materialCostByRecipe} bold warn />
-      </div>
+      <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '14px 2px 0', lineHeight: 1.6 }}>
+        ตัวเลขสองอันนี้ไม่เท่ากันเป็นเรื่องปกติ — ซื้อของทีเดียวแล้วทยอยใช้หลายเดือนก็ทำให้ต่างกันได้
+        ถ้าซื้อมากกว่าที่ขายไปมากผิดปกติติดกันหลายเดือน ลองดูที่หน้า "นับของ · ของหายไปไหน"
+      </p>
 
       {showAdd && (
         <AddExpenseModal onCancel={() => setShowAdd(false)} onSave={saveExpense} />
@@ -157,15 +205,6 @@ function Stat({ label, value, color, small }) {
     <div className="stat-card">
       <p style={{ fontSize: small ? 12 : 13, color: 'var(--text-secondary)', margin: '0 0 6px' }}>{label}</p>
       <p style={{ fontSize: small ? 18 : 24, fontWeight: 500, margin: 0, color }}>฿{Math.round(value).toLocaleString()}</p>
-    </div>
-  );
-}
-function Row({ label, value, bold, warn }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4, fontWeight: bold ? 500 : 400 }}>
-      <span>{label}</span><span style={{ color: warn ? 'var(--text-warning)' : undefined }}>
-        {value >= 0 ? '' : '-'}฿{Math.abs(Math.round(value)).toLocaleString()}
-      </span>
     </div>
   );
 }
