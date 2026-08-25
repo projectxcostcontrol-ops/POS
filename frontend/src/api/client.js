@@ -70,6 +70,21 @@ export const api = {
     request(`/api/${storeId}/materials/${materialId}/waste?quantity=${quantity}&note=${encodeURIComponent(note)}`,
       { method: 'POST' }),
   migrateStock: (storeId) => request(`/api/${storeId}/migrate-stock`, { method: 'POST' }),
+
+  /**
+   * Loyverse accounts. A business can have several - shops that grew one
+   * branch at a time often opened a separate Loyverse account for each,
+   * so one token means one branch. The token goes in the body, not the
+   * query string: query strings are written to access logs by every
+   * proxy they pass through.
+   */
+  listConnections: () => request('/api/settings/connections'),
+  addConnection: (token, label = '') =>
+    request('/api/settings/connections', {
+      method: 'POST', body: JSON.stringify({ token, label }),
+    }),
+  removeConnection: (connectionId) =>
+    request(`/api/settings/connections/${connectionId}`, { method: 'DELETE' }),
   rebuildStockSnapshot: (storeId) =>
     request(`/api/${storeId}/rebuild-stock-snapshot`, { method: 'POST' }),
 
@@ -219,8 +234,6 @@ export const api = {
   getAppSettings: () => request('/api/settings'),
   saveBusinessName: (name) =>
     request(`/api/settings/business-name?name=${encodeURIComponent(name)}`, { method: 'POST' }),
-  saveToken: (token) => request(`/api/settings/token?token=${encodeURIComponent(token)}`, { method: 'POST' }),
-  disconnectToken: () => request('/api/settings/disconnect', { method: 'POST' }),
   saveSyncInterval: (seconds) =>
     request(`/api/settings/sync-interval?seconds=${seconds}`, { method: 'POST' }),
 

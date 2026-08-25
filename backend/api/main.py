@@ -10,6 +10,7 @@ goes through a Store already scoped to that tenant. See api/deps.py.
 import asyncio
 import os
 import secrets
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -25,6 +26,7 @@ from core.stock_engine import sync_branch
 from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
+from core.pos_registry import PosRegistry
 from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
@@ -74,17 +76,34 @@ class Ctx:
         self.store = root_store.for_tenant(self.tenant_id)
         self.ledger = MovementLedger(self.store)
         self.matcher = MatchingEngine(self.store)
+        self.pos = PosRegistry(self.store,
+                               lambda conn: _adapter_for(self.tenant_id, conn),
+                               _now())
+
+    # ---- Loyverse accounts -------------------------------------------
+    # There is deliberately no `c.provider`. A business can hold several
+    # Loyverse accounts, so "the provider" is not a thing that exists -
+    # asking for one without saying which branch is a question with no
+    # correct answer, and the old property answered it anyway by handing
+    # back whichever account happened to be first. Every caller has a
+    # store_id in its path already, so every caller can say which.
 
     @property
-    def provider(self) -> LoyverseAdapter:
-        p = get_provider(self.tenant_id, self.store)
-        if p is None:
-            raise HTTPException(400, "Loyverse ยังไม่ได้เชื่อมต่อ - ใส่ token ในหน้าตั้งค่าก่อน")
-        return p
+    def connections(self) -> list[dict]:
+        return self.pos.connections
 
-    @property
-    def provider_or_none(self) -> LoyverseAdapter | None:
-        return get_provider(self.tenant_id, self.store)
+    def provider_for(self, store_id: str) -> LoyverseAdapter:
+        adapter = self.pos.provider_for(store_id)
+        if adapter is None:
+            if not self.connections:
+                raise HTTPException(
+                    400, "ยังไม่ได้เชื่อมต่อ Loyverse - เพิ่ม token ในหน้าตั้งค่าก่อน")
+            raise HTTPException(
+                400, "ไม่รู้ว่าสาขานี้มาจากบัญชี Loyverse ไหน - เปิดหน้าตั้งค่าเพื่อโหลดรายชื่อสาขาใหม่")
+        return adapter
+
+    def branches(self) -> tuple[list[dict], list[dict]]:
+        return self.pos.branches()
 
 
 def ctx(user: dict = Depends(current_user)) -> Ctx:
@@ -133,19 +152,21 @@ store_settings = _store_cap("manage_settings", "เฉพาะเจ้าข�
 # every request, and keyed by the token itself so changing the token in
 # Settings takes effect immediately without a restart.
 
-_providers: dict[str, tuple[str, LoyverseAdapter]] = {}
+_providers: dict[tuple[str, str], tuple[str, LoyverseAdapter]] = {}
 
 
-def get_provider(tenant_id: str, store: Store) -> LoyverseAdapter | None:
-    token = store.get_setting("loyverse_token")
-    if not token:
-        _providers.pop(tenant_id, None)
-        return None
-    cached = _providers.get(tenant_id)
+def _adapter_for(tenant_id: str, conn: dict) -> LoyverseAdapter:
+    """Cached per (business, Loyverse account) so a busy shop isn't
+    rebuilding an HTTP client on every request, and keyed by the token
+    itself so replacing one in Settings takes effect immediately without
+    a restart."""
+    key = (tenant_id, conn["id"])
+    token = conn["token"]
+    cached = _providers.get(key)
     if cached and cached[0] == token:
         return cached[1]
     adapter = LoyverseAdapter(token)
-    _providers[tenant_id] = (token, adapter)
+    _providers[key] = (token, adapter)
     return adapter
 
 
@@ -154,35 +175,88 @@ def _sync_interval(store: Store) -> int:
                or os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
 
 
+def _sync_everything_once() -> None:
+    """One pass over every branch of every Loyverse account of every
+    business. Ordinary blocking code - see auto_sync_loop for where it
+    runs.
+
+    Failures are contained at each level on purpose: one account with a
+    dead token must not stop that business's other accounts, and one
+    business must not stop the rest.
+    """
+    try:
+        tenants = root_store.list_tenants()
+    except Exception as e:
+        print(f"[auto_sync] could not list tenants: {e}")
+        return
+
+    for tenant in tenants:
+        tenant_id = tenant.get("id")
+        try:
+            scoped = root_store.for_tenant(tenant_id)
+            scoped.migrate_legacy_token(_now())
+            connections = scoped.list_connections()
+        except Exception as e:
+            print(f"[auto_sync] tenant {tenant_id} error: {e}")
+            continue
+
+        for conn in connections:
+            try:
+                adapter = _adapter_for(tenant_id, conn)
+                for branch in adapter.get_stores():
+                    sync_branch(adapter, scoped, branch["id"])
+            except Exception as e:
+                print(f"[auto_sync] tenant {tenant_id} "
+                      f"connection {conn.get('id')} error: {e}")
+
+
+def _shortest_interval() -> int:
+    default = int(os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
+    try:
+        intervals = [_sync_interval(root_store.for_tenant(t["id"]))
+                     for t in root_store.list_tenants()]
+    except Exception:
+        return default
+    return min([default] + intervals)
+
+
 async def auto_sync_loop():
-    """Syncs every branch of every business on an interval, so stock deducts
-    without anyone pressing a button. A business with no token connected is
-    skipped, and one business's failure never stops the others."""
+    """Syncs every branch on an interval, so stock deducts without anyone
+    pressing a button.
+
+    The work runs in a thread. It used to be called directly from this
+    coroutine, and every line of it is blocking - HTTP to Loyverse,
+    Firestore reads and writes - so for as long as a pass took, the whole
+    API was frozen. Not slow: stopped. Every request from every other
+    business waited for it, and the more businesses signed up the longer
+    the freeze, which is exactly backwards from how it should scale.
+    Nothing about the sync itself changed; it just no longer holds the
+    event loop hostage while it runs.
+
+    One caveat worth writing down: this loop lives inside the API
+    process, so running more than one instance means each one syncs
+    everything. Saving is idempotent, but two instances could both read
+    "not yet processed" for the same receipt and both deduct it. Before
+    scaling past a single instance, this moves to a scheduler calling an
+    endpoint, or takes a lock in Firestore.
+    """
     while True:
         try:
-            tenants = root_store.list_tenants()
+            await asyncio.to_thread(_sync_everything_once)
         except Exception as e:
-            print(f"[auto_sync] could not list tenants: {e}")
-            tenants = []
-
-        shortest = int(os.environ.get("SYNC_INTERVAL_SECONDS", "300"))
-        for tenant in tenants:
-            try:
-                scoped = root_store.for_tenant(tenant["id"])
-                provider = get_provider(tenant["id"], scoped)
-                shortest = min(shortest, _sync_interval(scoped))
-                if provider is None:
-                    continue
-                for s in provider.get_stores():
-                    sync_branch(provider, scoped, s["id"])
-            except Exception as e:
-                print(f"[auto_sync] tenant {tenant.get('id')} error: {e}")
-        await asyncio.sleep(max(30, shortest))
+            print(f"[auto_sync] pass failed: {e}")
+        interval = await asyncio.to_thread(_shortest_interval)
+        await asyncio.sleep(max(30, interval))
 
 
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(auto_sync_loop())
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(auto_sync_loop())
+    yield
+    task.cancel()
+
+
+app.router.lifespan_context = lifespan
 
 
 # ---- signup ------------------------------------------------------------
@@ -265,7 +339,8 @@ def signup_join(data: dict, claims: dict = Depends(current_claims)):
 def get_settings(c: Ctx = Depends(ctx)):
     tenant = c.store.get_tenant() or {}
     return {
-        "connected": c.provider_or_none is not None,
+        "connected": len(c.connections) > 0,
+        "connection_count": len(c.connections),
         "sync_interval_seconds": _sync_interval(c.store),
         "business_name": tenant.get("name", ""),
         "created_at": tenant.get("created_at", ""),
@@ -282,22 +357,98 @@ def set_business_name(name: str, c: Ctx = Depends(require_settings)):
     return {"business_name": name}
 
 
-@app.post("/api/settings/token")
-def set_token(token: str, c: Ctx = Depends(require_settings)):
-    """Save the Loyverse token and try connecting with it immediately."""
+@app.get("/api/settings/connections")
+def list_connections(c: Ctx = Depends(require_settings)):
+    """The connected Loyverse accounts and the branches each one brings.
+
+    The token itself is never returned. It went in once; there is no
+    screen that needs to show it again, and anything that displays a
+    credential is somewhere it can be read over a shoulder or copied out
+    of a screenshot."""
+    branches, failures = c.branches()
+    failed = {f["connection_id"]: f["error"] for f in failures}
+    # Recorded from the branches just fetched rather than by calling
+    # refresh_index(), which would ask every Loyverse account the same
+    # question a second time for the same screen.
+    c.store.set_store_index({b["id"]: b["connection_id"] for b in branches})
+
+    return {"connections": [{
+        "id": conn["id"],
+        "label": conn.get("label", ""),
+        "created_at": conn.get("created_at", ""),
+        "error": failed.get(conn["id"]),
+        "stores": [{"id": b["id"], "name": b["name"]}
+                   for b in branches if b["connection_id"] == conn["id"]],
+    } for conn in c.connections]}
+
+
+def _add_connection(c: Ctx, token: str, label: str) -> dict:
+    token = (token or "").strip()
+    if not token:
+        raise HTTPException(400, "กรุณาใส่ access token")
+
+    # Proved before it is stored: a token that doesn't work is worth
+    # rejecting at the moment someone can still paste the right one.
     try:
-        LoyverseAdapter(token).get_stores()
+        stores = LoyverseAdapter(token).get_stores()
     except Exception as e:
         raise HTTPException(400, f"เชื่อมต่อไม่สำเร็จ - เช็ค token: {e}")
-    c.store.set_setting("loyverse_token", token)
-    _providers.pop(c.tenant_id, None)
+
+    for existing in c.store.list_connections():
+        if existing.get("token") == token:
+            raise HTTPException(400, "บัญชี Loyverse นี้เชื่อมต่ออยู่แล้ว")
+
+    if not label.strip():
+        # Name it after what it actually contains, so a list of accounts
+        # reads as a list of shops rather than "บัญชี 1, บัญชี 2".
+        names = [st["name"] for st in stores]
+        label = " · ".join(names[:2]) + ("…" if len(names) > 2 else "") or "บัญชี Loyverse"
+
+    conn = c.store.add_connection(token, label.strip(), _now())
+    c.store.set_store_index({st["id"]: conn["id"] for st in stores})
+    c.pos.invalidate()
+    return {"connection": {**conn, "stores": stores}, "connected": True}
+
+
+@app.post("/api/settings/connections")
+def add_connection(data: dict, c: Ctx = Depends(require_settings)):
+    """data: {token, label}. Adds one more Loyverse account.
+
+    In the body rather than the query string, unlike the endpoint below:
+    a query string is written to access logs by every proxy it passes
+    through, which is not where an access token should end up."""
+    return _add_connection(c, data.get("token", ""), data.get("label", ""))
+
+
+@app.post("/api/settings/token")
+def set_token(token: str, c: Ctx = Depends(require_settings)):
+    """The single-token endpoint, kept so an older frontend still works
+    through a deploy. Adds a connection like any other."""
+    _add_connection(c, token, "")
     return {"connected": True}
+
+
+@app.delete("/api/settings/connections/{conn_id}")
+def remove_connection(conn_id: str, c: Ctx = Depends(require_settings)):
+    """Stops syncing this Loyverse account. Everything already synced
+    from it stays where it is - see Store.delete_connection."""
+    if not c.store.get_connection(conn_id):
+        raise HTTPException(404, "ไม่พบบัญชีนี้")
+    c.store.delete_connection(conn_id)
+    _providers.pop((c.tenant_id, conn_id), None)
+    c.pos.invalidate()
+    return {"ok": True}
 
 
 @app.post("/api/settings/disconnect")
 def disconnect(c: Ctx = Depends(require_settings)):
+    """Disconnects every account. Kept for the older frontend, which had
+    only one to disconnect."""
+    for conn in c.store.list_connections():
+        c.store.delete_connection(conn["id"])
+        _providers.pop((c.tenant_id, conn["id"]), None)
     c.store.set_setting("loyverse_token", None)
-    _providers.pop(c.tenant_id, None)
+    c.pos.invalidate()
     return {"connected": False}
 
 
@@ -311,17 +462,27 @@ def set_sync_interval(seconds: int, c: Ctx = Depends(require_settings)):
 
 @app.get("/api/stores")
 def list_stores(c: Ctx = Depends(ctx)):
-    stores = c.provider.get_stores()
-    if can(c.user["role"], "all_stores"):
-        return stores
-    allowed = set(c.user.get("store_ids") or [])
-    return [s for s in stores if s["id"] in allowed]
+    """Every branch this person can use, from every connected account.
+
+    Which Loyverse account a branch came from travels with it, because
+    two accounts can easily hold a branch called "สาขา 1" and the person
+    switching between them needs to be able to tell which is which.
+    """
+    branches, _ = c.branches()
+    c.store.set_store_index({b["id"]: b["connection_id"] for b in branches})
+
+    if not can(c.user["role"], "all_stores"):
+        allowed = set(c.user.get("store_ids") or [])
+        branches = [b for b in branches if b["id"] in allowed]
+
+    show_account = len({b["connection_id"] for b in branches}) > 1
+    return [{**b, "show_account": show_account} for b in branches]
 
 
 @app.get("/api/{store_id}/items")
 def list_items(store_id: str, c: Ctx = Depends(store_ctx)):
     """Items come read-only from Loyverse; category assignment is ours."""
-    items = c.provider.get_items()
+    items = c.provider_for(store_id).get_items()
     assignments = c.store.get_item_categories(store_id)
     for item in items:
         item["category_id"] = assignments.get(item["name"])
@@ -330,7 +491,7 @@ def list_items(store_id: str, c: Ctx = Depends(store_ctx)):
 
 @app.get("/api/{store_id}/loyverse-categories")
 def list_loyverse_categories(store_id: str, c: Ctx = Depends(store_ctx)):
-    return c.provider.get_categories()
+    return c.provider_for(store_id).get_categories()
 
 
 @app.get("/api/{store_id}/categories")
@@ -830,7 +991,7 @@ def reconcile_sales(store_id: str, days: int = 1, c: Ctx = Depends(store_money))
     start_iso = normalize_time(start.isoformat())
 
     try:
-        live = c.provider.get_receipts(store_id, created_at_min=start_iso)
+        live = c.provider_for(store_id).get_receipts(store_id, created_at_min=start_iso)
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
@@ -875,7 +1036,7 @@ def repair_sales(store_id: str, c: Ctx = Depends(store_settings)):
     exactly what left a month of history unsaved while today's figures
     looked fine."""
     try:
-        result = sync_branch(c.provider, c.store, store_id, full=True)
+        result = sync_branch(c.provider_for(store_id), c.store, store_id, full=True)
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
@@ -1027,7 +1188,7 @@ def _unmeasured_menus(c: Ctx, store_id: str, session: dict,
     "none found", so it's better to be silent than wrong about which
     menus are covered."""
     try:
-        receipts = c.provider.get_receipts(
+        receipts = c.provider_for(store_id).get_receipts(
             store_id, created_at_min=(previous or {}).get("closed_at"))
     except Exception:
         return []
@@ -1100,7 +1261,7 @@ def list_receipts(store_id: str, created_at_min: str | None = None,
     window is entirely beyond the plan's reach, which is a billing fact
     to explain rather than a server error to dump on the user."""
     try:
-        return c.provider.get_receipts(store_id, created_at_min=created_at_min)
+        return c.provider_for(store_id).get_receipts(store_id, created_at_min=created_at_min)
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(
@@ -1118,7 +1279,7 @@ def sync(store_id: str, full: bool = False, c: Ctx = Depends(store_ctx)):
     time: saving is keyed by receipt number so it overwrites rather than
     duplicating, and stock is never deducted twice."""
     try:
-        result = sync_branch(c.provider, c.store, store_id, full=full)
+        result = sync_branch(c.provider_for(store_id), c.store, store_id, full=full)
     except requests.HTTPError as e:
         if e.response is not None and e.response.status_code == 402:
             raise HTTPException(

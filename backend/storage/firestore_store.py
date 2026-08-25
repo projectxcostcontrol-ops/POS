@@ -109,6 +109,81 @@ class Store:
         self._tenant_doc().collection("app_settings").document("config").set(
             {key: value}, merge=True)
 
+    # ---- Loyverse connections -----------------------------------------
+    # One access token is one Loyverse ACCOUNT, and an account is not the
+    # same thing as a business. Shops that grew branch by branch often
+    # opened a separate Loyverse account for each one, so a single
+    # business can hold several tokens - and the earlier design, which
+    # kept one token per tenant, simply had no way to express that. The
+    # owner picked one branch and the others were unreachable.
+    #
+    # Branches stay completely separate: every branch already stores its
+    # data under stores/{store_id}, and a store id from one Loyverse
+    # account never collides with one from another. Nothing is merged
+    # across accounts, and nothing needs to be.
+
+    def _connections_col(self):
+        return self._tenant_doc().collection("loyverse_connections")
+
+    def list_connections(self) -> list[dict]:
+        return [d.to_dict() | {"id": d.id} for d in self._connections_col().stream()]
+
+    def get_connection(self, conn_id: str) -> dict | None:
+        doc = self._connections_col().document(conn_id).get()
+        return (doc.to_dict() | {"id": doc.id}) if doc.exists else None
+
+    def add_connection(self, token: str, label: str, created_at: str) -> dict:
+        _, ref = self._connections_col().add({
+            "token": token, "label": label, "created_at": created_at,
+            "last_error": None,
+        })
+        return {"id": ref.id, "label": label, "created_at": created_at}
+
+    def update_connection(self, conn_id: str, data: dict):
+        self._connections_col().document(conn_id).set(data, merge=True)
+
+    def delete_connection(self, conn_id: str):
+        """Removes the connection only.
+
+        Everything synced from it - sales, stock movements, recipes,
+        counts - stays exactly where it is, under its branch. Removing a
+        token means "stop talking to this Loyverse account", not "throw
+        away the history it produced", and those two would be very
+        different buttons to press by accident.
+        """
+        self._connections_col().document(conn_id).delete()
+        index = {k: v for k, v in self.get_store_index().items() if v != conn_id}
+        self._tenant_doc().collection("app_settings").document("store_index").set(
+            index)
+
+    # Which connection a branch came from. Kept as one small document so
+    # answering "whose token do I use for this branch" is a single read,
+    # not a walk through every account asking each one if it owns it.
+    def get_store_index(self) -> dict:
+        doc = self._tenant_doc().collection("app_settings").document("store_index").get()
+        return (doc.to_dict() or {}) if doc.exists else {}
+
+    def set_store_index(self, mapping: dict):
+        self._tenant_doc().collection("app_settings").document("store_index").set(
+            mapping, merge=True)
+
+    def migrate_legacy_token(self, created_at: str) -> bool:
+        """Turns the old single `loyverse_token` setting into connection #1.
+
+        Runs itself, once, the first time a business with the old shape
+        is used - nobody has to reconnect anything or know this happened.
+        The old setting is left in place rather than deleted: it costs
+        nothing, and if this release has to be rolled back the previous
+        version finds what it expects.
+        """
+        if self.list_connections():
+            return False
+        token = self.get_setting("loyverse_token")
+        if not token:
+            return False
+        self.add_connection(token, "บัญชีหลัก", created_at)
+        return True
+
     # ---- the tenant record itself ----
     def get_tenant(self) -> dict | None:
         doc = self._tenant_doc().get()

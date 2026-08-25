@@ -32,7 +32,7 @@ function windowFor(period, custom) {
 const baht = (n) => '฿' + Math.round(n).toLocaleString('en-US');
 
 export default function Dashboard() {
-  const { storeId } = useStore();
+  const { storeId, stores, selectStore } = useStore();
   const { can, profile } = useAuth();
   const showMoney = can('view_money');
 
@@ -99,6 +99,7 @@ export default function Dashboard() {
 
   if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
 
+
   return (
     <div className="dashboard-page">
       <div className="page-header dashboard-header">
@@ -109,6 +110,7 @@ export default function Dashboard() {
           {new Date().toLocaleDateString('th-TH',
             { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
+          <BranchPicker stores={stores} storeId={storeId} onSelect={selectStore} />
         </div>
         {/* One button that does the whole job: pull anything new from the
             POS, check nothing was missed, and repair it if it was. The
@@ -157,6 +159,53 @@ export default function Dashboard() {
     </div>
   );
 }
+
+/**
+ * Switching branch from the home screen.
+ *
+ * It used to live in Settings, which is a page for things you set once.
+ * Which shop you are looking at is not that: an owner with three
+ * branches changes it several times a day, and every figure on this
+ * screen means something different depending on the answer. A single
+ * branch is shown as plain text rather than a control with one option.
+ *
+ * `show_account` comes from the backend and is true only when the
+ * branches span more than one Loyverse account - two accounts can each
+ * hold a branch called "สาขา 1", and without the account name there is
+ * no way to tell them apart. With one account it would be noise.
+ */
+function BranchPicker({ stores, storeId, onSelect }) {
+  if (!stores || stores.length === 0) return null;
+
+  const describe = (s) =>
+    s.show_account && s.connection_label ? `${s.name} · ${s.connection_label}` : s.name;
+
+  if (stores.length === 1) {
+    return (
+      <p style={{ fontSize: 12.5, color: 'var(--text-muted)', margin: '6px 0 0' }}>
+        {describe(stores[0])}
+      </p>
+    );
+  }
+
+  return (
+    <select
+      value={storeId}
+      onChange={(e) => onSelect(e.target.value)}
+      aria-label="เลือกสาขา"
+      style={{
+        marginTop: 8, fontSize: 13, fontWeight: 500, padding: '6px 10px',
+        borderRadius: 8, maxWidth: '100%',
+        background: 'var(--surface-1)', border: '1px solid var(--border)',
+      }}
+    >
+      {stores.map((s) => (
+        <option key={s.id} value={s.id}>{describe(s)}</option>
+      ))}
+    </select>
+  );
+}
+
 
 function Alerts({ alerts }) {
   if (!alerts) return null;
