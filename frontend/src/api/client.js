@@ -104,11 +104,23 @@ export const api = {
 
   getMe: () => request('/api/me'),
   listUsers: () => request('/api/users'),
+  /**
+   * Invites go through the body, not the query string. An invite token is
+   * a credential - whoever holds it can join the business with the role it
+   * carries - and every proxy between here and the backend writes request
+   * URLs to an access log, where it would outlive the invite itself. The
+   * invited person's email is someone else's personal data and doesn't
+   * belong in a log either.
+   */
   inviteUser: (email, role, storeIds = []) =>
-    request(`/api/users/invite?email=${encodeURIComponent(email)}&role=${role}&store_ids=${storeIds.join(',')}`,
-      { method: 'POST' }),
+    request('/api/users/invites', {
+      method: 'POST',
+      body: JSON.stringify({ email, role, store_ids: storeIds }),
+    }),
   cancelInvite: (token) =>
-    request(`/api/users/invite?token=${encodeURIComponent(token)}`, { method: 'DELETE' }),
+    request('/api/users/invites/cancel', {
+      method: 'POST', body: JSON.stringify({ token }),
+    }),
   updateUserRole: (uid, role, storeIds = []) =>
     request(`/api/users/${uid}?role=${role}&store_ids=${storeIds.join(',')}`, { method: 'PUT' }),
   removeUser: (uid) => request(`/api/users/${uid}`, { method: 'DELETE' }),
@@ -219,7 +231,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ business_name: businessName, display_name: displayName }),
     }),
-  peekInvite: (token) => request(`/api/invites/${encodeURIComponent(token)}`),
+  peekInvite: (token) =>
+    request('/api/invites/peek', { method: 'POST', body: JSON.stringify({ token }) }),
   signupStatus: () => request('/api/signup/status'),
   signupJoin: (token, displayName) =>
     request('/api/signup/join', {

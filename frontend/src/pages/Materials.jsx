@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
+import { newId } from '../util/ids';
 
 const UNITS = ['กรัม', 'กก.', 'มล.', 'ลิตร', 'ชิ้น', 'ขวด'];
 
@@ -57,7 +58,7 @@ export default function Materials() {
   const lowCount = materials.filter((m) => (m.stock ?? 0) <= (m.par || 0)).length;
 
   async function saveEdit(form) {
-    const id = editing.id || form.name.trim().toLowerCase().replace(/\s+/g, '-');
+    const id = editing.id || newId();
     await api.upsertMaterial(storeId, id, {
       name: form.name, unit: form.unit, cost: parseFloat(form.cost) || 0,
       par: parseFloat(form.par) || 0,

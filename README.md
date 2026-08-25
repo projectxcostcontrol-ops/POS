@@ -22,6 +22,23 @@ control Terminal via Automation - allow it.
 
 ## Testing
 
+Everything offline, in one command:
+
+```bash
+cd backend
+python tests/run_all.py
+```
+
+No emulator, no credentials, no network - the whole suite runs against an
+in-memory stand-in for Firestore. It also runs on every push via GitHub
+Actions (`.github/workflows/tests.yml`), alongside a frontend build.
+
+The individual files are described below; run one on its own while
+working on the thing it covers. Two of them need the outside world and
+are skipped by the runner: `test_scan_invoice.py` (needs a Gemini key and
+a real photo) and `test_sale_flow.py` (writes a receipt to a real
+Loyverse account).
+
 Two scripts, for two different jobs:
 
 **`backend/tests/test_stock.py`** - checks the V2 stock logic is correct.

@@ -3,6 +3,7 @@ import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { compressImage } from '../utils/imageCompress';
 import MaterialPicker from '../components/MaterialPicker';
+import { newId } from '../util/ids';
 
 export default function Receiving() {
   const { storeId } = useStore();
@@ -467,7 +468,7 @@ function QuickCreateMaterial({ storeId, defaultName, defaultUnit, onCancel, onCr
     }
     setSaving(true);
     setError('');
-    const id = name.trim().toLowerCase().replace(/\s+/g, '-') + '-' + Date.now().toString(36);
+    const id = newId();
     try {
       await api.upsertMaterial(storeId, id, { name: name.trim(), unit, cost: 0, par: 0 });
       onCreated({ id, name: name.trim(), unit, cost: 0, par: 0, stock: 0 });

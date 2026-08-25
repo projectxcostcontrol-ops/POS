@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
+import { newId } from '../util/ids';
 
 const QUICK_UNITS = ['กรัม', 'กก.', 'มล.', 'ลิตร', 'ชิ้น', 'ขวด', 'ฟอง', 'ถุง'];
 
@@ -49,7 +50,7 @@ export default function MaterialPicker({ materials, value, onChange, storeId, on
 
     setCreating(true);
     try {
-      const id = `mat_${Date.now()}`;
+      const id = newId();
       // No cost here on purpose - unit cost comes from what this very
       // delivery charged, which the row's price field is about to record.
       await api.upsertMaterial(storeId, id, {

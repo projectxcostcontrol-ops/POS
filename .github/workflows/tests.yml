@@ -1,0 +1,62 @@
+# Runs on every push and pull request.
+#
+# The suite was already here and already good - 508 checks - but nothing
+# ran it except a person remembering to. The two jobs below cover the two
+# things that have actually gone wrong in this project:
+#
+#   backend  - the checks themselves, plus proof that the pinned
+#              dependency versions still install together. A deploy once
+#              broke login without a line of code changing, because the
+#              versions were unpinned and resolved to an incompatible
+#              pair (see NOTES.md section 8). Installing from the pins
+#              on every push is how that stays visible.
+#
+#   frontend - `npm run build`. There is no frontend test suite yet, but
+#              a build catches the class of mistake that has slipped
+#              through most often: a syntax error or a bad import in a
+#              page nobody opened before deploying.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install pinned dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      # No credentials, no emulator, no network: the whole suite runs
+      # against an in-memory stand-in for Firestore.
+      - name: Run offline tests
+        working-directory: backend
+        run: python tests/run_all.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build

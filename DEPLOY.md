@@ -58,6 +58,7 @@ Environment variables to set in the platform's dashboard:
 | `FIREBASE_STORAGE_BUCKET` | for receipt photos (optional, see last section) |
 | `SYNC_INTERVAL_SECONDS` | optional fallback; the live value is set per business on its own Settings page |
 | `MAX_TENANTS` | how many businesses may sign up (default 10, for the closed beta) — see below |
+| `ALLOWED_ORIGINS` | the frontend URL, e.g. `https://app.example.com` (comma-separated for more than one) — see below |
 
 Do **not** set `FIRESTORE_EMULATOR_HOST` or `FIREBASE_AUTH_EMULATOR_HOST` in
 production - if either is present, the backend tries to verify logins against
@@ -77,6 +78,30 @@ sees the link. Leave it empty to disable the page entirely.
 The admin view deliberately exposes only counts - there's no endpoint that
 opens a customer's stock, recipes, or takings. The promise that each
 restaurant's data is private has to hold against us too.
+
+### `ALLOWED_ORIGINS`
+
+Which sites a browser may call this API from. Leave it unset and every
+origin is allowed, and the backend prints a warning saying so on startup.
+
+Nothing is broken while it is unset: every request is authorised by a
+Bearer token the page has to attach deliberately, not by a cookie the
+browser sends on its own, so another site loading this API in the
+background gets a 401 and nothing else. Set it anyway — it costs one
+value, and `*` is the sort of default that stops being harmless the day
+someone adds cookie-based auth without re-reading that line.
+
+Set it to the frontend's own URL, exactly as the browser sees it
+(scheme included, no trailing slash):
+
+```
+ALLOWED_ORIGINS=https://app.example.com
+```
+
+If you also open the app from somewhere else — a staging deploy, a
+custom domain — list them comma-separated. During local development
+`http://localhost:5173` needs to be in the list, or leave the variable
+unset on your own machine.
 
 ### `MAX_TENANTS` (closed beta)
 

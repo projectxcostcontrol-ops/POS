@@ -13,12 +13,56 @@ FIREBASE_CREDENTIALS_PATH to a local file path (easier for local dev).
 
 import os
 import json
+import hashlib
+import re
 
 # Local development only. Must match VITE_FIREBASE_PROJECT_ID in the
 # frontend's .env - a token minted for one project id is rejected by an
 # admin SDK initialized with another, which shows up as an "aud" claim
 # error at login rather than anything obviously project-related.
 EMULATOR_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "pos-app-dev")
+
+
+# ---- document ids made from user-typed text -----------------------------
+# Firestore will not accept just any string as a document id: no "/", not
+# "." or "..", nothing wrapped in double underscores, and 1,500 bytes at
+# most. Menu names are typed by a shop owner, and "ชา/กาแฟ" is a perfectly
+# ordinary thing to call a menu item - it just cannot be an id. Using the
+# name directly meant that saving a recipe for it failed outright, with an
+# error from deep inside the SDK that says nothing about menu names.
+
+_ID_MAX_BYTES = 1000          # well under Firestore's 1,500, room for growth
+_RESERVED = re.compile(r"^__.*__$")
+
+
+def is_safe_doc_id(name: str) -> bool:
+    if not name or "/" in name:
+        return False
+    if name in (".", ".."):
+        return False
+    if _RESERVED.match(name):
+        return False
+    return len(name.encode("utf-8")) <= _ID_MAX_BYTES
+
+
+def doc_key(name: str) -> str:
+    """A usable id for a document keyed by a name.
+
+    A name Firestore already accepts is kept as its own id. That is
+    deliberate and worth the branch: every recipe, category and skip
+    written before this existed is stored under its raw name, so keeping
+    them means no migration and nothing to go wrong during one - and it
+    keeps the console readable, where "ผัดไท" says what it is and a hash
+    says nothing.
+
+    Anything Firestore would reject is hashed instead. Those documents
+    could never have been written before, so there is no old data in that
+    shape to worry about. The real name is stored INSIDE the document
+    either way, and that - not the id - is what reads return.
+    """
+    if is_safe_doc_id(name):
+        return name
+    return "~" + hashlib.sha1((name or "").encode("utf-8")).hexdigest()[:32]
 
 
 def init_firestore():
@@ -217,11 +261,16 @@ class Store:
 
     # ---- assigning a Loyverse item (by name) to one of our own categories ----
     def set_item_category(self, store_id: str, item_name: str, category_id: str):
-        self._col(store_id, "item_categories").document(item_name).set({"category_id": category_id})
+        self._col(store_id, "item_categories").document(doc_key(item_name)).set(
+            {"category_id": category_id, "item_name": item_name})
 
     def get_item_categories(self, store_id: str) -> dict:
         """Returns {item_name: category_id} for every assignment made."""
-        return {d.id: d.to_dict().get("category_id") for d in self._col(store_id, "item_categories").stream()}
+        out = {}
+        for d in self._col(store_id, "item_categories").stream():
+            data = d.to_dict() or {}
+            out[data.get("item_name") or d.id] = data.get("category_id")
+        return out
 
     # ---- materials (raw ingredients) ----
     # Stock is NOT stored on the material document anymore - it's derived
@@ -246,6 +295,36 @@ class Store:
             return factory(value)
         from google.cloud import firestore
         return firestore.Increment(value)
+
+    def _field_value(self, name: str, *args):
+        """Firestore's server-side field operations, asked of the database
+        rather than imported from the SDK - same reason as increment():
+        the in-memory test double supplies its own, so tests exercise the
+        write path production takes instead of a simpler one."""
+        factory = getattr(self.db, name, None)
+        if factory is not None:
+            return factory(*args)
+        from google.cloud import firestore
+        if name == "array_union":
+            return firestore.ArrayUnion(*args)
+        if name == "array_remove":
+            return firestore.ArrayRemove(*args)
+        if name == "delete_field":
+            return firestore.DELETE_FIELD
+        raise KeyError(name)
+
+    def field_path(self, *segments):
+        """A path to one field inside a document.
+
+        Built through the SDK rather than by joining with dots, because a
+        segment is arbitrary user-derived text: an id containing a dot or
+        a space would otherwise be read as two field names and write to
+        the wrong place."""
+        factory = getattr(self.db, "field_path", None)
+        if factory is not None:
+            return factory(*segments)
+        from google.cloud.firestore_v1.field_path import FieldPath
+        return FieldPath(*segments)
 
     def material_ref(self, store_id: str, material_id: str):
         return self._col(store_id, "materials").document(material_id)
@@ -321,6 +400,14 @@ class Store:
         are refused for the same reason, and more bluntly: they are the
         ledger's arithmetic, and letting a request set them would make
         them a second, editable copy of the truth."""
+        if not is_safe_doc_id(material_id):
+            # The frontend builds these; a slug made from a name like
+            # "น้ำปลา/ซีอิ๊ว" contains a slash. Refusing here with a
+            # readable message beats an SDK error that mentions neither
+            # the material nor the name it came from.
+            raise ValueError(
+                f"รหัสวัตถุดิบใช้ไม่ได้: {material_id!r} - ห้ามมี / และต้องไม่ยาวเกินไป")
+
         blocked = {"stock", *self.SNAPSHOT_FIELDS}
         data = {k: v for k, v in data.items() if k not in blocked}
 
@@ -357,16 +444,21 @@ class Store:
 
     # ---- aliases (for the matching engine - step 4.2) ----
     def add_alias(self, store_id: str, material_id: str, alias: str):
-        """A general alternate name for a material, from any supplier."""
-        doc_ref = self._col(store_id, "materials").document(material_id)
-        current = (doc_ref.get().to_dict() or {}).get("aliases", [])
-        if alias not in current:
-            doc_ref.update({"aliases": current + [alias]})
+        """A general alternate name for a material, from any supplier.
+
+        ArrayUnion, not read-append-write. Confirming a scanned delivery
+        learns an alias for every matched line at once, and the old
+        version read the list, added one name and wrote the whole list
+        back - so two lines finishing at the same moment each saved a
+        list that did not contain the other's name, and one of the two
+        was simply lost. Silently: nothing failed, the alias just wasn't
+        there next time."""
+        self._col(store_id, "materials").document(material_id).update(
+            {"aliases": self._field_value("array_union", [alias])})
 
     def remove_alias(self, store_id: str, material_id: str, alias: str):
-        doc_ref = self._col(store_id, "materials").document(material_id)
-        current = (doc_ref.get().to_dict() or {}).get("aliases", [])
-        doc_ref.update({"aliases": [a for a in current if a != alias]})
+        self._col(store_id, "materials").document(material_id).update(
+            {"aliases": self._field_value("array_remove", [alias])})
 
     def get_supplier_alias(self, store_id: str, supplier: str, normalized_name: str) -> str | None:
         """normalized_name should already be through matching_engine._normalize."""
@@ -557,7 +649,7 @@ class Store:
 
     # ---- recipes (menu item -> ingredient quantities) ----
     def get_recipe(self, store_id: str, item_name: str) -> list[dict]:
-        doc = self._col(store_id, "recipes").document(item_name).get()
+        doc = self._col(store_id, "recipes").document(doc_key(item_name)).get()
         return (doc.to_dict() or {}).get("ingredients", [])
 
     def all_recipes(self, store_id: str) -> dict[str, list[dict]]:
@@ -567,11 +659,20 @@ class Store:
         fetching them one at a time is a read per distinct dish - dozens
         of round trips to answer one screen. A restaurant's whole recipe
         book is small enough to fetch at once and far cheaper that way."""
-        return {d.id: (d.to_dict() or {}).get("ingredients", [])
-                for d in self._col(store_id, "recipes").stream()}
+        # Keyed by the stored name, not the document id - for a menu whose
+        # name Firestore can't use as an id those are different strings,
+        # and the caller is looking up by what sold. Documents written
+        # before the name was stored fall back to the id, which for them
+        # is the name.
+        out = {}
+        for d in self._col(store_id, "recipes").stream():
+            data = d.to_dict() or {}
+            out[data.get("item_name") or d.id] = data.get("ingredients", [])
+        return out
 
     def set_recipe(self, store_id: str, item_name: str, ingredients: list[dict]):
-        self._col(store_id, "recipes").document(item_name).set({"ingredients": ingredients})
+        self._col(store_id, "recipes").document(doc_key(item_name)).set(
+            {"ingredients": ingredients, "item_name": item_name})
 
     # ---- expenses ----
     def add_expense(self, store_id: str, category: str, name: str, amount: float, date: str):
@@ -729,19 +830,19 @@ class Store:
 
     def set_recipe_draft(self, store_id: str, item_name: str, kind: str,
                          ingredients: list[dict]):
-        self._col(store_id, "recipe_drafts").document(item_name).set({
+        self._col(store_id, "recipe_drafts").document(doc_key(item_name)).set({
             "item_name": item_name, "kind": kind, "ingredients": ingredients,
         })
 
     def get_recipe_draft(self, store_id: str, item_name: str) -> dict | None:
-        doc = self._col(store_id, "recipe_drafts").document(item_name).get()
+        doc = self._col(store_id, "recipe_drafts").document(doc_key(item_name)).get()
         return doc.to_dict() if doc.exists else None
 
     def list_recipe_drafts(self, store_id: str) -> list[dict]:
         return [d.to_dict() for d in self._col(store_id, "recipe_drafts").stream()]
 
     def delete_recipe_draft(self, store_id: str, item_name: str):
-        self._col(store_id, "recipe_drafts").document(item_name).delete()
+        self._col(store_id, "recipe_drafts").document(doc_key(item_name)).delete()
 
     # ---- menu items deliberately excluded from recipes ----
     # Service charges and the like never consume stock. Marking them keeps
@@ -750,13 +851,15 @@ class Store:
     # list fills with items that are fine, and then nobody reads it.
 
     def skip_recipe(self, store_id: str, item_name: str):
-        self._col(store_id, "recipe_skips").document(item_name).set({"item_name": item_name})
+        self._col(store_id, "recipe_skips").document(doc_key(item_name)).set(
+            {"item_name": item_name})
 
     def unskip_recipe(self, store_id: str, item_name: str):
-        self._col(store_id, "recipe_skips").document(item_name).delete()
+        self._col(store_id, "recipe_skips").document(doc_key(item_name)).delete()
 
     def list_recipe_skips(self, store_id: str) -> list[str]:
-        return [d.id for d in self._col(store_id, "recipe_skips").stream()]
+        return [(d.to_dict() or {}).get("item_name") or d.id
+                for d in self._col(store_id, "recipe_skips").stream()]
 
     # ---- stock count sessions (step 3.4) ----
     # Counting a whole kitchen takes longer than one sitting, so a session
@@ -790,16 +893,21 @@ class Store:
 
     def set_count_entry(self, store_id: str, session_id: str,
                         material_id: str, counted: float):
-        doc_ref = self._col(store_id, "stock_counts").document(session_id)
-        entries = (doc_ref.get().to_dict() or {}).get("entries", {})
-        entries[material_id] = counted
-        doc_ref.update({"entries": entries})
+        """Writes one entry, by field path.
+
+        Counting a kitchen is the one job in this system that two people
+        genuinely do at the same time - one takes the dry store, one
+        takes the fridge. The old version read the whole entries map,
+        set one key and wrote the map back, so whoever saved second
+        erased everything the other had counted since their own read.
+        Nothing errored; the numbers were simply gone, and the count
+        looked finished."""
+        self._col(store_id, "stock_counts").document(session_id).update(
+            {self.field_path("entries", material_id): counted})
 
     def clear_count_entry(self, store_id: str, session_id: str, material_id: str):
-        doc_ref = self._col(store_id, "stock_counts").document(session_id)
-        entries = (doc_ref.get().to_dict() or {}).get("entries", {})
-        entries.pop(material_id, None)
-        doc_ref.update({"entries": entries})
+        self._col(store_id, "stock_counts").document(session_id).update(
+            {self.field_path("entries", material_id): self._field_value("delete_field")})
 
     def close_count_session(self, store_id: str, session_id: str, closed_at: str):
         self._col(store_id, "stock_counts").document(session_id).update({

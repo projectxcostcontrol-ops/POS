@@ -44,7 +44,28 @@ load_dotenv()
 MAX_TENANTS = int(os.environ.get("MAX_TENANTS", "10"))
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Which sites the browser may call this API from.
+#
+# The risk here is smaller than "*" usually implies: every request is
+# authorised by a Bearer token the page has to attach deliberately, not
+# by a cookie the browser sends on its own, so a hostile site loading
+# this API in the background gets nothing. It is still worth naming the
+# real front end - defence in depth costs one environment variable, and
+# "*" is the kind of default that stops being harmless the day someone
+# adds cookie auth without re-reading this line.
+#
+# Unset means "*", with a warning, so an existing deployment does not
+# break the moment this ships. Set ALLOWED_ORIGINS to the frontend's URL
+# (comma-separated for more than one) - see DEPLOY.md.
+_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if not _origins:
+    _origins = ["*"]
+    print("[cors] ALLOWED_ORIGINS is not set - allowing every origin. "
+          "Set it to the frontend URL in production.")
+
+app.add_middleware(CORSMiddleware, allow_origins=_origins,
+                   allow_methods=["*"], allow_headers=["*"])
 
 # The unscoped root store. Only auth, signup, and the admin overview use it
 # directly; every business endpoint works through a tenant-scoped view.
@@ -293,8 +314,7 @@ def signup_business(data: dict, claims: dict = Depends(current_claims)):
     return {"tenant_id": tenant_id, "business_name": name, "role": OWNER}
 
 
-@app.get("/api/invites/{token}")
-def peek_invite(token: str, claims: dict = Depends(current_claims)):
+def _peek_invite(token: str) -> dict:
     """What the join screen shows before the person commits: which business
     invited them, as which role. Returns only that - no data belonging to
     the business itself."""
@@ -307,6 +327,22 @@ def peek_invite(token: str, claims: dict = Depends(current_claims)):
         "email": invite["email"],
         "role": invite["role"],
     }
+
+
+@app.post("/api/invites/peek")
+def peek_invite_v2(data: dict, claims: dict = Depends(current_claims)):
+    """data: {token}. The token is already in the invited person's own
+    address bar - that is how the link works - but it does not have to be
+    in our access logs as well, and a log is where it would sit readable
+    long after the invite was used."""
+    return _peek_invite((data.get("token") or "").strip())
+
+
+@app.get("/api/invites/{token}")
+def peek_invite(token: str, claims: dict = Depends(current_claims)):
+    """Deprecated: token in the path, and therefore in access logs. Kept
+    for a frontend deployed before this release."""
+    return _peek_invite(token)
 
 
 @app.post("/api/signup/join")
@@ -422,8 +458,10 @@ def add_connection(data: dict, c: Ctx = Depends(require_settings)):
 
 @app.post("/api/settings/token")
 def set_token(token: str, c: Ctx = Depends(require_settings)):
-    """The single-token endpoint, kept so an older frontend still works
-    through a deploy. Adds a connection like any other."""
+    """Deprecated: puts the access token in the query string, where every
+    proxy in the path writes it to an access log. Use POST
+    /api/settings/connections instead. Kept only so a frontend deployed
+    before this release keeps working."""
     _add_connection(c, token, "")
     return {"connected": True}
 
@@ -532,7 +570,12 @@ def list_materials(store_id: str, c: Ctx = Depends(store_ctx)):
 
 @app.put("/api/{store_id}/materials/{material_id}")
 def upsert_material(store_id: str, material_id: str, data: dict, c: Ctx = Depends(store_ctx)):
-    c.store.upsert_material(store_id, material_id, data)
+    try:
+        c.store.upsert_material(store_id, material_id, data)
+    except ValueError as e:
+        # An id Firestore cannot use. A 400 saying so beats a 500 from
+        # inside the SDK, which names neither the material nor the id.
+        raise HTTPException(400, str(e))
     return {"ok": True}
 
 
@@ -1044,20 +1087,6 @@ def repair_sales(store_id: str, c: Ctx = Depends(store_settings)):
     return result
 
 
-@app.get("/api/{store_id}/alerts")
-def alerts(store_id: str, c: Ctx = Depends(store_ctx)):
-    """Deliberately NOT gated on view_money - staff need to know stock is
-    running out, and none of this exposes takings."""
-    sessions = c.store.list_count_sessions(store_id)
-    last_closed = next((s.get("closed_at") for s in sessions
-                        if s.get("status") == "closed"), None)
-    return sales_report.build_alerts(
-        materials=c.store.list_materials(store_id),
-        pending_drafts=len(c.store.list_drafts(store_id)),
-        last_count_at=last_closed,
-    )
-
-
 @app.get("/api/{store_id}/counts")
 def list_count_sessions(store_id: str, c: Ctx = Depends(store_ctx)):
     return c.store.list_count_sessions(store_id)
@@ -1326,32 +1355,73 @@ def list_users(c: Ctx = Depends(require_users)):
     }
 
 
-@app.post("/api/users/invite")
-def invite_user(email: str, role: str, store_ids: str = "",
-                c: Ctx = Depends(require_users)):
-    """Creates an invite and returns its token. The owner copies the link and
-    sends it however they like - there's no email delivery to configure, and
-    nothing to go wrong silently in a spam folder."""
+# An invite token IS a credential: whoever holds it can join this
+# business with the role it carries. So it travels in the body, never in
+# a URL - every proxy, load balancer and platform between the browser and
+# here writes request URLs to an access log, and a log is a place
+# credentials survive long after the invite was used or cancelled. The
+# invited person's email address is in the body for the same reason,
+# minus the escalation: it is someone else's personal data, and it does
+# not belong in a log either.
+
+def _create_invite(c: Ctx, email: str, role: str, store_ids: list[str]) -> dict:
+    email = (email or "").strip()
+    if not email:
+        raise HTTPException(400, "กรุณาใส่อีเมล")
     if role not in ROLES:
         raise HTTPException(400, f"สิทธิ์ไม่ถูกต้อง - ต้องเป็นหนึ่งใน {', '.join(ROLES)}")
     if root_store.get_user_by_email(email):
         raise HTTPException(400, "อีเมลนี้มีบัญชีอยู่แล้ว")
 
-    ids = [s.strip() for s in store_ids.split(",") if s.strip()]
     token = secrets.token_urlsafe(16)
-    root_store.create_invite(token, email, role, c.tenant_id, ids,
+    root_store.create_invite(token, email, role, c.tenant_id, store_ids,
                              invited_by=c.user["uid"], created_at=_now())
     return {"ok": True, "token": token, "email": email.lower(), "role": role,
-            "store_ids": ids}
+            "store_ids": store_ids}
 
 
-@app.delete("/api/users/invite")
-def cancel_invite(token: str, c: Ctx = Depends(require_users)):
+def _cancel_invite(c: Ctx, token: str) -> dict:
     invite = root_store.get_invite(token)
     if invite and invite.get("tenant_id") != c.tenant_id:
         raise HTTPException(403, "คำเชิญนี้ไม่ใช่ของธุรกิจคุณ")
     root_store.delete_invite(token)
     return {"ok": True}
+
+
+@app.post("/api/users/invites")
+def invite_user_v2(data: dict, c: Ctx = Depends(require_users)):
+    """data: {email, role, store_ids: []}
+
+    Creates an invite and returns its token. The owner copies the link and
+    sends it however they like - there's no email delivery to configure, and
+    nothing to go wrong silently in a spam folder."""
+    ids = [str(s).strip() for s in (data.get("store_ids") or []) if str(s).strip()]
+    return _create_invite(c, data.get("email", ""), data.get("role", ""), ids)
+
+
+@app.post("/api/users/invites/cancel")
+def cancel_invite_v2(data: dict, c: Ctx = Depends(require_users)):
+    """data: {token}. A POST rather than a DELETE because DELETE with a
+    body is poorly supported by proxies, and the token must not be in the
+    URL - which is the entire reason this endpoint exists."""
+    return _cancel_invite(c, (data.get("token") or "").strip())
+
+
+@app.post("/api/users/invite")
+def invite_user(email: str, role: str, store_ids: str = "",
+                c: Ctx = Depends(require_users)):
+    """Deprecated: puts the email in the query string. Kept only so a
+    frontend deployed before this release keeps working; remove once
+    everything is on /api/users/invites."""
+    ids = [s.strip() for s in store_ids.split(",") if s.strip()]
+    return _create_invite(c, email, role, ids)
+
+
+@app.delete("/api/users/invite")
+def cancel_invite(token: str, c: Ctx = Depends(require_users)):
+    """Deprecated: puts an invite token in the query string, where it
+    lands in access logs. Kept for the older frontend only."""
+    return _cancel_invite(c, token)
 
 
 def _same_tenant_user(c: Ctx, uid: str) -> dict:

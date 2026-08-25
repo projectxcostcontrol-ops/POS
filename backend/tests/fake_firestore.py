@@ -24,13 +24,66 @@ class FakeIncrement:
         self.value = value
 
 
+class FakeArrayOp:
+    """firestore.ArrayUnion / ArrayRemove. Adds or removes members
+    server-side, so two people editing the same list don't overwrite each
+    other's edit the way read-modify-write does."""
+
+    __slots__ = ("values", "remove")
+
+    def __init__(self, values, remove=False):
+        self.values = list(values)
+        self.remove = remove
+
+
+class FakeFieldPath(tuple):
+    """A path to one field inside a document, e.g. ("entries", "m1").
+
+    Updating by path touches only that field. The alternative - read the
+    whole map, change one key, write the map back - loses whatever
+    someone else wrote in between, which for a stock count means two
+    people counting different shelves and one of them losing their work.
+    """
+
+    def __new__(cls, *segments):
+        return super().__new__(cls, segments)
+
+
+DELETE_FIELD = object()
+
+
+def _resolve(current, value):
+    if isinstance(value, FakeIncrement):
+        return (current or 0) + value.value
+    if isinstance(value, FakeArrayOp):
+        existing = list(current or [])
+        if value.remove:
+            return [x for x in existing if x not in value.values]
+        return existing + [v for v in value.values if v not in existing]
+    return value
+
+
 def _apply_increments(current: dict, data: dict) -> dict:
-    out = {}
+    """Resolve field values against what is stored. Plain keys replace;
+    increments and array ops combine; field paths reach into a nested
+    map, and DELETE_FIELD removes."""
+    out = dict(current)
     for k, v in data.items():
-        if isinstance(v, FakeIncrement):
-            out[k] = (current.get(k) or 0) + v.value
-        else:
-            out[k] = v
+        if isinstance(k, FakeFieldPath):
+            target = out
+            for seg in k[:-1]:
+                nxt = dict(target.get(seg) or {})
+                target[seg] = nxt
+                target = nxt
+            if v is DELETE_FIELD:
+                target.pop(k[-1], None)
+            else:
+                target[k[-1]] = _resolve(target.get(k[-1]), v)
+            continue
+        if v is DELETE_FIELD:
+            out.pop(k, None)
+            continue
+        out[k] = _resolve(current.get(k), v)
     return out
 
 
@@ -55,14 +108,17 @@ class FakeDocRef:
     def set(self, data, merge=False):
         self._col.count("writes")
         stored = self._col._docs().get(self.id, {})
-        current = dict(stored) if merge else {}
-        current.update(_apply_increments(stored, data))
-        self._col._docs()[self.id] = current
+        # merge keeps what is already there; a plain set replaces the
+        # document, and an increment in that case starts from zero.
+        base = dict(stored) if merge else {}
+        self._col._docs()[self.id] = _apply_increments(base, data)
 
     def update(self, data):
         self._col.count("writes")
         stored = self._col._docs().setdefault(self.id, {})
-        stored.update(_apply_increments(stored, data))
+        resolved = _apply_increments(stored, data)
+        stored.clear()
+        stored.update(resolved)
 
     def get(self):
         self._col.count("reads")
@@ -205,6 +261,18 @@ class FakeDb:
 
     def batch(self):
         return FakeBatch()
+
+    def array_union(self, values):
+        return FakeArrayOp(values)
+
+    def array_remove(self, values):
+        return FakeArrayOp(values, remove=True)
+
+    def field_path(self, *segments):
+        return FakeFieldPath(*segments)
+
+    def delete_field(self):
+        return DELETE_FIELD
 
     def increment(self, value):
         """Store asks the db for this rather than importing the SDK, so a
