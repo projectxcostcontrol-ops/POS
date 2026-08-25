@@ -917,6 +917,19 @@ def clear_count_entry(store_id: str, session_id: str, material_id: str,
     return {"ok": True}
 
 
+@app.delete("/api/{store_id}/counts/{session_id}")
+def cancel_count(store_id: str, session_id: str, c: Ctx = Depends(store_ctx)):
+    """Discard only an open count. Closed counts are audit history and are
+    never removable through this action."""
+    session = c.store.get_count_session(store_id, session_id)
+    if not session:
+        raise HTTPException(404, "ไม่พบรอบตรวจนับนี้")
+    if session.get("status") != "open":
+        raise HTTPException(400, "ยกเลิกได้เฉพาะรอบที่กำลังตรวจนับ")
+    c.store.delete_count_session(store_id, session_id)
+    return {"ok": True}
+
+
 @app.post("/api/{store_id}/counts/{session_id}/close")
 def close_count(store_id: str, session_id: str, c: Ctx = Depends(store_ctx)):
     """Commits every counted line to the ledger in one go, tagged with this

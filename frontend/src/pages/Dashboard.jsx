@@ -187,11 +187,11 @@ function Alerts({ alerts }) {
   if (alerts.count_due) {
     rows.push({
       to: '/stock-count', icon: CheckCircle, level: 'warn',
-      title: 'ถึงรอบตรวจนับสต๊อก',
+      title: 'ถึงรอบเช็กสต๊อกวัตถุดิบ',
       // "never counted" and "counted a while ago" are different situations:
       // one is a setup step nobody has done, the other a habit that slipped.
       sub: alerts.days_since_count === null
-        ? 'ยังไม่เคยนับ — นับครั้งแรกเพื่อเริ่มเทียบของหาย'
+        ? 'ยังไม่เคยเช็ก — รอบแรกใช้บันทึกยอดตั้งต้นสำหรับเปรียบเทียบครั้งถัดไป'
         : `นับครั้งล่าสุด ${alerts.days_since_count} วันที่แล้ว`,
     });
   }
@@ -402,7 +402,7 @@ function StaffShortcuts() {
   const links = [
     { to: '/materials', icon: Package, label: 'ของในครัว' },
     { to: '/receiving', icon: ShoppingCart, label: 'ซื้อของเข้าร้าน' },
-    { to: '/stock-count', icon: ClipboardText, label: 'นับของ' },
+    { to: '/stock-count', icon: ClipboardText, label: 'เช็กสต๊อกวัตถุดิบ' },
     { to: '/recipes', icon: CookingPot, label: 'สูตรอาหาร' },
   ];
 

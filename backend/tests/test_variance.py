@@ -237,6 +237,18 @@ def test_count_sessions_stay_out_of_the_ledger_until_closed():
     check("session still open", store.get_count_session("branch1", s["id"])["status"], "open")
 
 
+def test_an_open_count_can_be_discarded_without_touching_stock():
+    section("Cancelling an unfinished count deletes only the draft session")
+    store, ledger, _ = build()
+    s = store.create_count_session("branch1", "2026-07-24T09:00:00")
+    store.set_count_entry("branch1", s["id"], "shrimp", 12)
+
+    store.delete_count_session("branch1", s["id"])
+
+    check("draft session removed", store.get_count_session("branch1", s["id"]), None)
+    check("no stock movement written", ledger.list_movements("branch1"), [])
+
+
 def test_only_one_count_runs_at_a_time():
     section("Two open counts would each hold a different idea of the same shelf")
     store = make_test_store()
@@ -286,6 +298,7 @@ def main():
     test_adjustment_note_records_the_reason()
     test_summary_totals()
     test_count_sessions_stay_out_of_the_ledger_until_closed()
+    test_an_open_count_can_be_discarded_without_touching_stock()
     test_only_one_count_runs_at_a_time()
     test_previous_session_is_the_one_just_before()
     test_count_sessions_are_per_branch()

@@ -87,7 +87,7 @@ export default function Materials() {
         }}>
           ⚠ สต๊อกติดลบ: {negatives.map((m) => `${m.name} (${m.stock})`).join(', ')}
           <div style={{ fontSize: 12, marginTop: 4 }}>
-            แปลว่าสูตรอาจใส่ปริมาณมากเกินจริง หรือยังไม่ได้บันทึกของที่ซื้อเข้ามา - ตรวจสอบแล้วนับของใหม่
+            แปลว่าสูตรอาจใส่ปริมาณมากเกินจริง หรือยังไม่ได้บันทึกของที่ซื้อเข้ามา — ตรวจสอบแล้วเช็กสต๊อกใหม่
           </div>
         </div>
       )}
@@ -192,8 +192,8 @@ export default function Materials() {
             }}>
               การแก้ตรงนี้จะ<b>ไม่ถูกนับเป็นส่วนต่าง</b>ในรายงาน และจะกลบส่วนต่างที่สะสมอยู่ด้วย
               <br />
-              ถ้ากำลังนับของตามรอบ ให้ใช้หน้า{' '}
-              <a href="/stock-count" style={{ color: 'var(--accent)' }}>นับของ</a> แทน
+              ถ้ากำลังตรวจนับตามรอบ ให้ใช้หน้า{' '}
+              <a href="/stock-count" style={{ color: 'var(--accent)' }}>เช็กสต๊อกวัตถุดิบ</a> แทน
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setAdjusting(null)}>ยกเลิก</button>
@@ -211,7 +211,7 @@ export default function Materials() {
 }
 
 const KIND_LABEL = {
-  receive: 'ซื้อเข้า', sale: 'ขาย', count: 'นับของ', waste: 'ของเสีย',
+  receive: 'ซื้อเข้า', sale: 'ขาย', count: 'เช็กสต๊อก', waste: 'ของเสีย',
 };
 
 function HistoryModal({ storeId, material, onClose }) {

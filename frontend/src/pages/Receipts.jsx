@@ -48,6 +48,9 @@ export default function Receipts() {
   const [dayBills, setDayBills] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const periodLabel = period === 'custom'
+    ? 'ช่วงเวลาที่เลือก'
+    : PERIODS.find((p) => p.id === period)?.label;
 
   useEffect(() => {
     if (!storeId) return;
@@ -58,6 +61,9 @@ export default function Receipts() {
     setError('');
 
     Promise.all([
+      // `top=0` asks for every sold item. The backend still does the
+      // aggregation in the same sales read and ranks by quantity, so the
+      // summary card does not need another request or bill-by-bill maths.
       api.getSalesOverview(storeId, from, to, 'day', 0),
       api.getDailySales(storeId, from, to),
     ])
@@ -129,13 +135,41 @@ export default function Receipts() {
 
       {summary && !loading && (
         <>
-          <div className="card" style={{ padding: '15px 14px 10px', marginBottom: 16 }}>
-            <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
-              <Stat label="ยอดรวม" value={baht(summary.total)} big />
-              <Stat label="จำนวนบิล" value={summary.bill_count} />
-              <Stat label="เฉลี่ยต่อบิล"
-                value={summary.bill_count
-                  ? baht(summary.total / summary.bill_count) : '—'} />
+          <div className="card" style={{
+            padding: '16px 17px 10px', marginBottom: 10,
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between',
+              gap: 16, flexWrap: 'wrap',
+            }}>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 500 }}>
+                  ยอดขายรวม · {periodLabel}
+                </div>
+                <div style={{
+                  fontSize: 26, lineHeight: 1.2, fontWeight: 700,
+                  marginTop: 4, letterSpacing: -.45, color: 'var(--accent)',
+                }}>
+                  {baht(summary.total)}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 22 }}>
+                <Stat label="จำนวนบิล" value={summary.bill_count} />
+                <Stat label="เฉลี่ยต่อบิล"
+                  value={summary.bill_count
+                    ? baht(summary.total / summary.bill_count) : '—'} />
+              </div>
+            </div>
+
+            <SalesItemsTable items={summary.top_items} />
+          </div>
+
+          <div className="card" style={{ padding: '12px 14px 9px', marginBottom: 16 }}>
+            <div style={{
+              fontSize: 11, color: 'var(--text-muted)', fontWeight: 500,
+              marginBottom: 5,
+            }}>
+              แนวโน้มยอดขาย
             </div>
             <SalesChart points={summary.points} from={summary.from} to={summary.to}
               granularity="day" formatValue={baht} compact />
@@ -217,4 +251,69 @@ function Stat({ label, value, big }) {
       </div>
     </div>
   );
+}
+
+function SalesItemsTable({ items }) {
+  const rows = [...(items || [])].sort((a, b) =>
+    (b.qty || 0) - (a.qty || 0) || (b.revenue || 0) - (a.revenue || 0));
+
+  return (
+    <div style={{ marginTop: 15, borderTop: '1px solid var(--border)' }}>
+      <div style={{
+        display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) 58px 82px',
+        gap: 8, padding: '9px 0 7px', fontSize: 10.5,
+        color: 'var(--text-muted)', fontWeight: 600,
+      }}>
+        <span style={{ textAlign: 'center' }}>#</span>
+        <span>รายการที่ขาย</span>
+        <span style={{ textAlign: 'right' }}>จำนวน</span>
+        <span style={{ textAlign: 'right' }}>ยอดขาย</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p style={{
+          fontSize: 11.5, color: 'var(--text-muted)',
+          textAlign: 'center', margin: 0, padding: '10px 0 7px',
+        }}>
+          ยังไม่มีรายการสินค้าที่ขายในช่วงนี้
+        </p>
+      ) : (
+        <div style={{ maxHeight: 292, overflowY: 'auto' }}>
+          {rows.map((item, index) => (
+            <div key={`${item.name}-${index}`} style={{
+              display: 'grid', gridTemplateColumns: '28px minmax(0, 1fr) 58px 82px',
+              gap: 8, alignItems: 'center', padding: '9px 0',
+              borderTop: '1px solid var(--border)',
+            }}>
+              <span style={{
+                textAlign: 'center', fontSize: 12, fontWeight: 600,
+                color: index === 0 ? 'var(--accent)' : 'var(--text-muted)',
+              }}>
+                {index + 1}
+              </span>
+              <span style={{
+                minWidth: 0, fontSize: 12.5, fontWeight: 500,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }} title={item.name}>
+                {item.name}
+              </span>
+              <span style={{ textAlign: 'right', fontSize: 12.5, fontWeight: 600 }}>
+                {formatQuantity(item.qty)}
+              </span>
+              <span style={{ textAlign: 'right', fontSize: 12, color: 'var(--text-muted)' }}>
+                {baht(item.revenue || 0)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatQuantity(value) {
+  const n = Number(value) || 0;
+  return Number.isInteger(n) ? n.toLocaleString('en-US') : n.toLocaleString('en-US', {
+    maximumFractionDigits: 2,
+  });
 }

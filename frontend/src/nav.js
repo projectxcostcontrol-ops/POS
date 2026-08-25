@@ -34,8 +34,7 @@ export const REGULAR = [
   // because the result of a count belongs where the counting happens -
   // finishing a count and having to go find the answer somewhere else is
   // how people stopped looking at it.
-  { to: '/stock-count', icon: ClipboardText, label: 'นับของ · ของหายไปไหน',
-    was: 'นับสต๊อก + วิเคราะห์ส่วนต่าง' },
+  { to: '/stock-count', icon: ClipboardText, label: 'เช็กสต๊อกวัตถุดิบ' },
   { to: '/receipts', icon: Receipt, label: 'รายการขาย',
     was: 'รายการบิล', needs: 'view_money' },
   { to: '/income-expense', icon: Wallet, label: 'รายรับรายจ่าย',

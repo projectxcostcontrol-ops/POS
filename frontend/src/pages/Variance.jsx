@@ -44,10 +44,10 @@ export default function Variance() {
   if (sessions.length === 0) {
     return (
       <div>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>ของหายไปไหน</p>
+        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>สรุปส่วนต่างวัตถุดิบ</p>
         <div className="card" style={{ marginTop: 12 }}>
           <p style={{ fontSize: 13, margin: 0 }}>
-            ยังไม่มีรอบนับที่ปิดแล้ว — ไปที่หน้า "นับของ" เพื่อนับรอบแรกก่อน
+            ยังไม่มีรอบที่บันทึกแล้ว — ไปที่หน้า “เช็กสต๊อกวัตถุดิบ” เพื่อบันทึกยอดตั้งต้นก่อน
           </p>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '8px 0 0' }}>
             ระบบเทียบได้เฉพาะกับของที่นับจริงเท่านั้น ถ้าไม่นับ ตัวเลขในระบบก็คือตัวเลขที่คำนวณจากสูตร
@@ -62,7 +62,7 @@ export default function Variance() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
-          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>ของหายไปไหน</p>
+          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>สรุปส่วนต่างวัตถุดิบ</p>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
             เทียบของที่นับได้จริง กับที่ควรเหลือตามสูตรและยอดขาย
           </p>
@@ -107,8 +107,7 @@ export default function Variance() {
             }}>
               <div>
                 ⚠ {report.unmeasured_menus.length} เมนูขายไปแล้วแต่ยังไม่ผูกสูตร —
-                วัตถุดิบที่ใช้กับเมนูพวกนี้จะโผล่มาเป็น "ของหาย" ทั้งที่ไม่ได้หาย
-                ตัวเลขด้านล่างจึงยังไม่ครบ
+                ระบบยังคำนวณการใช้วัตถุดิบของเมนูเหล่านี้ไม่ได้ ตัวเลขส่วนต่างด้านล่างจึงยังไม่ครบ
               </div>
               <button onClick={() => setShowUnmeasured(!showUnmeasured)}
                 style={{ background: 'none', padding: 0, fontSize: 11, color: 'var(--accent)', marginTop: 4 }}>
@@ -123,7 +122,7 @@ export default function Variance() {
           )}
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-            <StatCard label="มูลค่าที่หายไป" value={`฿${report.summary.shortfall_value.toLocaleString()}`} />
+            <StatCard label="มูลค่าส่วนต่างที่อาจสูญเสีย" value={`฿${report.summary.shortfall_value.toLocaleString()}`} />
             <StatCard label="เกินเกณฑ์" value={report.summary.flagged_count} />
             <StatCard label="เทียบไม่ได้" value={report.summary.unmeasurable_count} />
           </div>

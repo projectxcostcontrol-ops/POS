@@ -169,6 +169,8 @@ export const api = {
   clearCountEntry: (storeId, sessionId, materialId) =>
     request(`/api/${storeId}/counts/${sessionId}/entry?material_id=${materialId}`,
       { method: 'DELETE' }),
+  cancelCount: (storeId, sessionId) =>
+    request(`/api/${storeId}/counts/${sessionId}`, { method: 'DELETE' }),
   closeCount: (storeId, sessionId) =>
     request(`/api/${storeId}/counts/${sessionId}/close`, { method: 'POST' }),
   getVariance: (storeId, sessionId) => request(`/api/${storeId}/variance/${sessionId}`),

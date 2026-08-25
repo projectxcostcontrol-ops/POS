@@ -26,8 +26,10 @@ export default function SalesChart({ points, from, to, granularity, formatValue,
   // ratio became much taller than the information justified. A shallower
   // viewBox keeps labels and hit targets correctly proportioned without
   // stretching the SVG or changing any chart behaviour.
-  const H = compact ? 122 : 170;
-  const M = { top: 10, right: 8, bottom: 22, left: 34 };
+  const H = compact ? 108 : 170;
+  const M = compact
+    ? { top: 8, right: 6, bottom: 18, left: 30 }
+    : { top: 10, right: 8, bottom: 22, left: 34 };
   const PW = W - M.left - M.right;
   const PH = H - M.top - M.bottom;
 
@@ -79,27 +81,29 @@ export default function SalesChart({ points, from, to, granularity, formatValue,
         {ticks.map((v) => (
           <g key={v}>
             <line x1={M.left} y1={y(v)} x2={M.left + PW} y2={y(v)}
-              stroke="var(--border)" strokeWidth="1" />
+              stroke="var(--border)" strokeWidth={compact ? .65 : 1} />
             <text x={M.left - 6} y={y(v) + 3} textAnchor="end"
-              fontSize="8" fill="var(--text-muted)">{shortNumber(v)}</text>
+              fontSize={compact ? 6.5 : 8} fill="var(--text-muted)">{shortNumber(v)}</text>
           </g>
         ))}
 
         <path d={area} fill="url(#salesFill)" />
         <path d={`M${M.left},${t0} L${M.left + PW},${t1}`} fill="none"
-          stroke="var(--text-warning)" strokeWidth="1.5" strokeDasharray="5 4" opacity=".8" />
-        <path d={line} fill="none" stroke="var(--accent)" strokeWidth="2"
+          stroke="var(--text-warning)" strokeWidth={compact ? 1 : 1.5}
+          strokeDasharray={compact ? '4 3' : '5 4'} opacity=".8" />
+        <path d={line} fill="none" stroke="var(--accent)" strokeWidth={compact ? 1.35 : 2}
           strokeLinejoin="round" strokeLinecap="round" />
 
         {pos.map(([px, py], i) => (
-          <circle key={i} cx={px} cy={py} r={i === sel ? 4 : 2.2}
+          <circle key={i} cx={px} cy={py}
+            r={i === sel ? (compact ? 3 : 4) : (compact ? 1.6 : 2.2)}
             fill={i === sel ? 'var(--accent)' : 'var(--surface-2)'}
-            stroke="var(--accent)" strokeWidth="1.6" />
+            stroke="var(--accent)" strokeWidth={compact ? 1.1 : 1.6} />
         ))}
 
         {series.map((p, i) => (p.label ? (
           <text key={`l-${i}`} x={x(i)} y={H - 7} textAnchor="middle"
-            fontSize="8" fill="var(--text-muted)">{p.label}</text>
+            fontSize={compact ? 6.5 : 8} fill="var(--text-muted)">{p.label}</text>
         ) : null))}
 
         {/* Invisible full-height columns: a 2px dot is unhittable with a
@@ -130,7 +134,7 @@ export default function SalesChart({ points, from, to, granularity, formatValue,
 
       <div style={{
         display: 'flex', gap: 14, justifyContent: 'flex-end', marginTop: 4,
-        fontSize: 10.5, color: 'var(--text-muted)',
+        fontSize: compact ? 9 : 10.5, color: 'var(--text-muted)',
       }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           <i style={{ width: 14, borderTop: '2px solid var(--accent)' }} />ยอดขาย

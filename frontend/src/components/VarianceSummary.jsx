@@ -46,13 +46,13 @@ export default function VarianceSummary({ storeId, session }) {
 
   const caveats = [];
   if (!report.has_baseline) {
-    caveats.push('รอบนับแรก ยังไม่มีรอบก่อนหน้าให้เทียบ — ตัวเลขนี้เป็นการปรับสต๊อกให้ตรง ไม่ใช่ของที่หายไป');
+    caveats.push('รอบแรกยังไม่มีรอบก่อนหน้าให้เทียบ — ตัวเลขนี้เป็นเพียงการปรับสต๊อกให้ตรง ระบบจะเริ่มคำนวณส่วนต่างได้หลังจบรอบถัดไป');
   }
   if (report.offcycle_adjustments > 0) {
     caveats.push(`มีการแก้ไขจำนวนนอกรอบ ${report.offcycle_adjustments} ครั้ง — ของที่หายจริงมีมากกว่าตัวเลขนี้`);
   }
   if (report.unmeasured_menus?.length > 0) {
-    caveats.push(`${report.unmeasured_menus.length} เมนูขายแล้วแต่ไม่มีสูตร — วัตถุดิบของเมนูพวกนี้ถูกนับเป็นของหายทั้งที่ไม่ได้หาย`);
+    caveats.push(`${report.unmeasured_menus.length} เมนูขายแล้วแต่ไม่มีสูตร — ระบบจึงยังคำนวณการใช้วัตถุดิบของเมนูเหล่านี้ไม่ได้`);
   }
 
   const worst = report.rows.filter((r) => r.variance_qty < 0).slice(0, 3);
@@ -62,11 +62,11 @@ export default function VarianceSummary({ storeId, session }) {
       <p style={{
         fontSize: 11, fontWeight: 600, letterSpacing: .6, color: 'var(--text-muted)',
         textTransform: 'uppercase', margin: '0 0 8px',
-      }}>ของหายไปไหน</p>
+      }}>สรุปส่วนต่างวัตถุดิบ</p>
 
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 16, marginBottom: 10 }}>
         <div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>มูลค่าที่หายไป</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>มูลค่าส่วนต่างที่อาจสูญเสีย</div>
           <div style={{
             fontSize: 24, fontWeight: 700, letterSpacing: -.5, marginTop: 1,
             color: report.summary.shortfall_value > 0
@@ -106,7 +106,7 @@ export default function VarianceSummary({ storeId, session }) {
       {open && (
         <div style={{ marginTop: 12 }}>
           <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 8px' }}>
-            เกณฑ์เตือน: หายเกิน {report.thresholds.pct}% ของที่ควรใช้ และมูลค่าเกิน ฿{report.thresholds.value}
+            เกณฑ์เตือน: ส่วนต่างเกิน {report.thresholds.pct}% ของที่ควรใช้ และมูลค่าเกิน ฿{report.thresholds.value}
           </p>
 
           {report.rows.length === 0 && (
@@ -134,7 +134,7 @@ export default function VarianceSummary({ storeId, session }) {
               </div>
               <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '2px 0 0' }}>
                 {r.measurable
-                  ? `ควรใช้ ${r.expected_usage} ${r.unit} · ${r.variance_qty < 0 ? 'หายเพิ่ม' : 'ใช้น้อยกว่าสูตร'} ${Math.abs(r.variance_qty)} ${r.unit} (${r.variance_pct}%)`
+                  ? `ควรใช้ ${r.expected_usage} ${r.unit} · ${r.variance_qty < 0 ? 'ส่วนต่างขาด' : 'ใช้น้อยกว่าสูตร'} ${Math.abs(r.variance_qty)} ${r.unit} (${r.variance_pct}%)`
                   : `ไม่มียอดใช้ในช่วงนี้ เทียบเป็น % ไม่ได้ · ต่างจากระบบ ${r.variance_qty} ${r.unit}`}
                 {r.recorded_waste > 0 && ` · บันทึกของเสียไว้ ${r.recorded_waste} ${r.unit}`}
               </p>

@@ -615,6 +615,10 @@ class Store:
             "status": "closed", "closed_at": closed_at,
         })
 
+    def delete_count_session(self, store_id: str, session_id: str):
+        """Discard an unfinished count without touching the stock ledger."""
+        self._col(store_id, "stock_counts").document(session_id).delete()
+
     def previous_closed_session(self, store_id: str, before: str) -> dict | None:
         """The count immediately before this one - the start of the period
         being measured."""

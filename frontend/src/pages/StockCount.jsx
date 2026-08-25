@@ -75,7 +75,7 @@ export default function StockCount() {
 
   async function close() {
     if (!window.confirm(
-      'ปิดรอบนับ? ตัวเลขที่นับจะถูกบันทึกเข้าระบบและใช้เป็นจุดเริ่มของรอบถัดไป')) return;
+      'บันทึกและจบรอบ? ตัวเลขที่ตรวจนับจะถูกบันทึกเข้าระบบและใช้เปรียบเทียบในรอบถัดไป')) return;
     setBusy(true);
     setError('');
     try {
@@ -84,6 +84,22 @@ export default function StockCount() {
       setValues({});
       setSessions(await api.listCounts(storeId));
       setMaterials(await api.getMaterials(storeId));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancel() {
+    if (!window.confirm(
+      'ยืนยันยกเลิกการเช็กสต๊อกรอบนี้? ข้อมูลจะไม่ถูกบันทึก')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.cancelCount(storeId, session.id);
+      setSession(null);
+      setValues({});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -103,9 +119,10 @@ export default function StockCount() {
   if (!session) {
     return (
       <div>
-        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>นับของ</p>
+        <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 4px' }}>เช็กสต๊อกวัตถุดิบ</p>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 16px' }}>
-          นับของจริงในครัวแล้วบันทึก ระบบจะได้บอกได้ว่าของหายไปเท่าไหร่
+          นับวัตถุดิบที่มีอยู่จริงและบันทึกไว้ เมื่อนับครบอย่างน้อย 2 รอบ
+          ระบบจะเปรียบเทียบกับยอดขายและสูตรอาหาร เพื่อแสดงวัตถุดิบที่ใช้จริงและส่วนต่างที่อาจสูญเสีย
         </p>
 
         {/* The result of the last count sits above the button to start the
@@ -120,16 +137,16 @@ export default function StockCount() {
           <p style={{ fontSize: 13, margin: '0 0 12px' }}>
             {lastClosed
               ? `รอบล่าสุด: ${formatDate(lastClosed.closed_at)}`
-              : 'ยังไม่เคยนับของ — รอบแรกเป็นจุดตั้งต้น ต้องนับรอบที่สองถึงจะเทียบได้ว่าหายไปเท่าไหร่'}
+              : 'เริ่มนับครั้งแรกเพื่อบันทึกยอดตั้งต้น เมื่อนับครั้งถัดไป ระบบจึงจะคำนวณและเปรียบเทียบส่วนต่างของวัตถุดิบได้'}
           </p>
           <button onClick={start} disabled={busy} style={{ background: 'var(--surface-1)' }}>
-            {busy ? 'กำลังเปิด...' : 'เริ่มนับรอบใหม่'}
+            {busy ? 'กำลังเปิด...' : lastClosed ? 'เริ่มเช็กสต๊อกรอบใหม่' : 'เริ่มเช็กสต๊อกครั้งแรก'}
           </button>
         </div>
 
         {closedSessions.length > 1 && (
           <div className="card">
-            <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>ประวัติการนับ</p>
+            <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 4px' }}>ประวัติการเช็กสต๊อก</p>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
               กดเพื่อดูผลของรอบนั้น
             </p>
@@ -167,15 +184,21 @@ export default function StockCount() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div>
-          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 2px' }}>กำลังนับ</p>
+          <p style={{ fontSize: 15, fontWeight: 500, margin: '0 0 2px' }}>กำลังเช็กสต๊อก</p>
           <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0 }}>
             เริ่ม {formatDate(session.started_at)} · บันทึกอัตโนมัติ · นับแล้ว {counted}/{materials.length}
           </p>
         </div>
-        <button onClick={close} disabled={busy || counted === 0}
-          style={{ background: 'var(--surface-1)', whiteSpace: 'nowrap' }}>
-          {busy ? 'กำลังปิด...' : 'ปิดรอบนับ'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button onClick={cancel} disabled={busy}
+            style={{ background: 'transparent', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
+            ยกเลิก
+          </button>
+          <button onClick={close} disabled={busy || counted === 0}
+            style={{ background: 'var(--surface-1)', whiteSpace: 'nowrap' }}>
+            {busy ? 'กำลังบันทึก...' : 'บันทึกและจบรอบ'}
+          </button>
+        </div>
       </div>
 
       {error && <p style={{ fontSize: 12, color: 'var(--text-danger)', marginBottom: 12 }}>{error}</p>}
