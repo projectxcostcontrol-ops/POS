@@ -6,7 +6,7 @@ const PHONE_LINK = '0826516461';
 const LINE_OA_ID = '@862uzpje';
 const STORE_TIME_ZONE = 'Asia/Bangkok';
 const STORE_OPEN_MINUTES = 8 * 60;
-const STORE_CLOSE_MINUTES = 17 * 60;
+const STORE_CLOSE_MINUTES = 18 * 60;
 
 function isStoreOpenNow() {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -118,7 +118,7 @@ export default function HongDuckMenu() {
         <div className="hong-brand-row">
           <img className="hong-brand-logo" src="/menu/hong-duck/logo-transparent.png" width="300" height="270" alt="ฮง เป็ดย่าง SINCE 2022" />
           <div className="hong-status-block">
-            <span className={`hong-open${storeOpen ? '' : ' closed'}`} title="เวลาเปิดร้าน 08:00–17:00 น."><i />{storeOpen ? 'เปิดอยู่' : 'ปิดอยู่'}</span>
+            <span className={`hong-open${storeOpen ? '' : ' closed'}`} title="เวลาเปิดร้าน 08:00–18:00 น."><i />{storeOpen ? 'เปิดอยู่' : 'ปิดอยู่'}</span>
             <span className="hong-branch"><MapPin size={14} />สาขาสี่แยกวิทยาลัยพยาบาล</span>
           </div>
         </div>
