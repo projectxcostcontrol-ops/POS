@@ -33,6 +33,7 @@ from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
 from core.expenses import clean_expense, ExpenseError
+from core.receiving import clean_receiving, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
                            is_pos_sale)
 from core.unit_conversion import apply_unit_conversion
@@ -723,15 +724,61 @@ def list_receivings(store_id: str, c: Ctx = Depends(store_ctx)):
     return c.store.list_receivings(store_id)
 
 
+def _clean_receiving(data: dict) -> dict:
+    try:
+        return clean_receiving(data.get("supplier"), data.get("date"),
+                               data.get("items"), data.get("note", ""))
+    except ReceivingError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/{store_id}/receivings")
 def add_receiving(store_id: str, data: dict, c: Ctx = Depends(store_ctx)):
-    return c.store.add_receiving(
-        store_id,
-        supplier=data.get("supplier", ""),
-        date=data.get("date", ""),
-        items=data.get("items", []),
-        note=data.get("note", ""),
-    )
+    r = _clean_receiving(data)
+    return c.store.add_receiving(store_id, supplier=r["supplier"], date=r["date"],
+                                 items=r["items"], note=r["note"])
+
+
+@app.put("/api/{store_id}/receivings/{receiving_id}")
+def update_receiving(store_id: str, receiving_id: str, data: dict,
+                     c: Ctx = Depends(store_ctx)):
+    """Corrects a delivery that was recorded wrong.
+
+    The old stock movements come out and new ones go in, rather than the
+    document being edited and the ledger left as it was. A delivery IS
+    its movements as far as the shelf and the cost history are concerned;
+    changing 5kg to 50kg on the paperwork while the ledger still says 5
+    would leave two answers to the same question, and the wrong one is
+    the one every report reads.
+    """
+    existing = c.store.get_receiving(store_id, receiving_id)
+    if not existing:
+        raise HTTPException(404, "ไม่พบรายการซื้อของนี้")
+    r = _clean_receiving(data)
+    _refuse_if_counted_since(c, store_id, existing.get("date"), "รายการซื้อของนี้")
+
+    c.ledger.delete_by_ref(store_id, receiving_id)
+    c.store.replace_receiving(store_id, receiving_id, r)
+    c.store.add_receiving_movements(store_id, receiving_id, r["supplier"],
+                                    r["date"], r["items"])
+    return {"ok": True, "id": receiving_id, **r}
+
+
+@app.delete("/api/{store_id}/receivings/{receiving_id}")
+def delete_receiving(store_id: str, receiving_id: str, c: Ctx = Depends(store_ctx)):
+    """Removes the delivery and takes its stock back off the shelf.
+
+    Both halves, or neither would be true: the ingredients were never
+    delivered, so they are not there, and the price was never paid, so it
+    should not be pulling the material's average cost around."""
+    existing = c.store.get_receiving(store_id, receiving_id)
+    if not existing:
+        raise HTTPException(404, "ไม่พบรายการซื้อของนี้")
+    _refuse_if_counted_since(c, store_id, existing.get("date"), "รายการซื้อของนี้")
+
+    removed = c.ledger.delete_by_ref(store_id, receiving_id)
+    c.store.delete_receiving(store_id, receiving_id)
+    return {"ok": True, "reverted_materials": removed}
 
 
 @app.post("/api/{store_id}/receiving/scan")
@@ -1436,6 +1483,23 @@ def list_receipts(store_id: str, created_at_min: str | None = None,
         raise
 
 
+def _refuse_if_counted_since(c: Ctx, store_id: str, at: str | None, what: str):
+    """Stops stock being taken back out from under a physical count.
+
+    A count writes a correction that lands the shelf figure on a number
+    someone measured by hand, and that number already included whatever
+    these movements put there. Removing them afterwards moves the figure
+    away from the one value in this system that was actually observed
+    rather than derived. Correcting it from here would be silently
+    overruling the person who counted."""
+    closed = [s.get("closed_at") for s in c.store.list_count_sessions(store_id)
+              if s.get("status") == "closed" and s.get("closed_at")]
+    if closed and max(closed) > (at or ""):
+        raise HTTPException(
+            400, f"แก้ไขหรือลบ{what}ไม่ได้ - มีการนับสต๊อกหลังจากนั้นแล้ว "
+                 "ถ้ายอดไม่ตรงให้แก้ด้วยการนับสต๊อกรอบใหม่แทน")
+
+
 # ---- orders the till never saw --------------------------------------
 # Grab, LINE MAN, the phone, the online menu. Recorded as ordinary sales
 # so every report already includes them, and deducted through the same
@@ -1519,17 +1583,7 @@ def delete_delivery_order(store_id: str, order_id: str,
     if not sale or is_pos_sale(sale):
         raise HTTPException(404, "ไม่พบออเดอร์นี้")
 
-    # Refused once a count has closed over it. The count wrote a
-    # correction to land on a number that already included these
-    # ingredients; taking them back now moves the shelf figure away from
-    # what someone physically counted, which is the one number in the
-    # system that was actually measured.
-    closed = [s.get("closed_at") for s in c.store.list_count_sessions(store_id)
-              if s.get("status") == "closed" and s.get("closed_at")]
-    if closed and max(closed) > (sale.get("date") or ""):
-        raise HTTPException(
-            400, "ลบไม่ได้ - มีการนับสต๊อกหลังออเดอร์นี้แล้ว "
-                 "ถ้ายอดผิดให้แก้ด้วยการนับสต๊อกรอบใหม่แทน")
+    _refuse_if_counted_since(c, store_id, sale.get("date"), "ออเดอร์นี้")
 
     returned = c.ledger.delete_by_ref(store_id, f"receipt:{order_id}")
     c.store.delete_sale(store_id, order_id)

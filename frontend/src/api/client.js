@@ -91,6 +91,17 @@ export const api = {
   getReceivings: (storeId) => request(`/api/${storeId}/receivings`),
   addReceiving: (storeId, data) =>
     request(`/api/${storeId}/receivings`, { method: 'POST', body: JSON.stringify(data) }),
+  /**
+   * Correcting a delivery replaces its stock movements, not just its
+   * paperwork - a delivery IS its movements as far as the shelf and the
+   * cost history are concerned. Deleting takes both back.
+   */
+  updateReceiving: (storeId, receivingId, data) =>
+    request(`/api/${storeId}/receivings/${receivingId}`, {
+      method: 'PUT', body: JSON.stringify(data),
+    }),
+  deleteReceiving: (storeId, receivingId) =>
+    request(`/api/${storeId}/receivings/${receivingId}`, { method: 'DELETE' }),
 
   scanInvoice: async (storeId, file) => {
     const form = new FormData();

@@ -580,6 +580,28 @@ class Store:
             )
         return {"id": doc_ref.id}
 
+    def get_receiving(self, store_id: str, receiving_id: str) -> dict | None:
+        doc = self._col(store_id, "receivings").document(receiving_id).get()
+        return (doc.to_dict() | {"id": doc.id}) if doc.exists else None
+
+    def replace_receiving(self, store_id: str, receiving_id: str, data: dict):
+        """Overwrites the delivery document itself. The stock movements
+        behind it are the caller's job - they are not fields on this
+        document, they are entries in the ledger, and correcting one
+        means taking the old entries out and putting new ones in."""
+        self._col(store_id, "receivings").document(receiving_id).set(data)
+
+    def delete_receiving(self, store_id: str, receiving_id: str):
+        self._col(store_id, "receivings").document(receiving_id).delete()
+
+    def add_receiving_movements(self, store_id: str, receiving_id: str,
+                                supplier: str, date: str, items: list[dict]):
+        for item in items:
+            self.receive_stock(
+                store_id, item["material_id"], item["quantity"], item["unit_cost"],
+                note=f"รับของจาก {supplier}", occurred_at=date, ref=receiving_id,
+            )
+
     def list_receivings(self, store_id: str) -> list[dict]:
         records = [d.to_dict() | {"id": d.id} for d in self._col(store_id, "receivings").stream()]
         records.sort(key=lambda r: r.get("date", ""), reverse=True)

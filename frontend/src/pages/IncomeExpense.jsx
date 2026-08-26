@@ -73,11 +73,18 @@ export default function IncomeExpense() {
   const income = overview?.total || 0;
 
   // The two halves of what ingredients cost, and they answer different
-  // questions. What the recipes say was consumed is what this month's
-  // sales actually used, so that is what a month's profit is measured
-  // against. What was bought is cash that left the till, which moves in
-  // lumps - a sack of rice bought today feeds three weeks - and is only
-  // comparable to the first over a long enough stretch.
+  // questions.
+  //
+  // What was BOUGHT is money that left the till this month, and that is
+  // what feeds the profit figure: an owner reads กำไรสุทธิ against what
+  // is actually in the account, and a number that disagrees with the bank
+  // is a number they stop trusting. The cost is that it moves in lumps -
+  // a sack of rice bought today feeds three weeks - so a month spent
+  // stocking up looks lean and the next looks generous.
+  //
+  // What the RECIPES say was consumed follows what actually sold, so it
+  // is steady and comparable between months. It stays in the card below,
+  // against purchases, where the gap between the two is the useful thing.
   const materialCostByRecipe = overview?.ingredient_cost || 0;
   const purchased = receivings
     .filter((r) => inPeriod(r.date))
@@ -91,7 +98,7 @@ export default function IncomeExpense() {
   const legacyMaterial = expenses.material.filter((e) => inPeriod(e.date));
   const fixedSum = fixedInPeriod.reduce((s, e) => s + e.amount, 0);
   const variableSum = variableInPeriod.reduce((s, e) => s + e.amount, 0);
-  const totalExpense = fixedSum + variableSum + materialCostByRecipe;
+  const totalExpense = fixedSum + variableSum + purchased;
   const uncosted = overview?.uncosted_menus || [];
 
   async function reloadExpenses() {
@@ -165,7 +172,7 @@ export default function IncomeExpense() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 24 }}>
         <Stat label="ค่าใช้จ่ายคงที่" value={fixedSum} small />
         <Stat label="ค่าใช้จ่ายผันแปร" value={variableSum} small />
-        <Stat label="ค่าวัตถุดิบ" value={materialCostByRecipe} small />
+        <Stat label="ค่าวัตถุดิบ" value={purchased} small />
       </div>
 
       {loading && <p style={{ fontSize: 13, marginTop: -12 }}>กำลังโหลด...</p>}
@@ -193,7 +200,7 @@ export default function IncomeExpense() {
           {isCurrentMonth && <button onClick={() => setEditing({})}>+ บันทึกรายจ่าย</button>}
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          ค่าวัตถุดิบระบบคำนวณให้เองจากสูตร × ยอดขาย ไม่ต้องกรอก
+          ค่าวัตถุดิบมาจากหน้า “ซื้อของเข้าร้าน” อัตโนมัติ ไม่ต้องกรอกที่นี่
           {legacyMaterial.length > 0 && ' — รายการค่าวัตถุดิบที่กรอกไว้เองจะไม่ถูกนับซ้ำ ลบทิ้งได้'}
         </p>
 
@@ -246,9 +253,10 @@ export default function IncomeExpense() {
             follows what actually sold. They only converge over a long
             enough stretch. */}
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+          กำไรสุทธิด้านบนใช้ “ซื้อจริง” เพราะเป็นเงินที่ออกจากร้านจริง ๆ ·{' '}
           {purchased - materialCostByRecipe >= 0
-            ? 'ซื้อมากกว่าที่ใช้ = ตุนของไว้ในสต๊อก (ปกติถ้าเพิ่งซื้อของเข้าร้าน)'
-            : 'ซื้อน้อยกว่าที่ใช้ = ใช้ของที่ตุนไว้เดิม (ปกติถ้าเดือนนี้ยังไม่ได้ซื้อเข้า)'}
+            ? 'เดือนนี้ซื้อมากกว่าที่ใช้ = ตุนของไว้ในสต๊อก กำไรจึงดูน้อยกว่าปกติ'
+            : 'เดือนนี้ซื้อน้อยกว่าที่ใช้ = กินของที่ตุนไว้เดิม กำไรจึงดูมากกว่าปกติ'}
         </p>
         <Row label="ซื้อจริง" value={purchased} />
         <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />

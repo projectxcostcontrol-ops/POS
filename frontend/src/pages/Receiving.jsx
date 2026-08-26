@@ -11,6 +11,10 @@ export default function Receiving() {
   const [receivings, setReceivings] = useState([]);
   const [drafts, setDrafts] = useState([]);
   const [showForm, setShowForm] = useState(false);
+  // null = closed, {} = a new delivery, a receiving = correcting that one
+  const [editingReceiving, setEditingReceiving] = useState(null);
+  const [busyId, setBusyId] = useState('');
+  const [listError, setListError] = useState('');
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState('');
   const [reviewingDraft, setReviewingDraft] = useState(null);
@@ -23,6 +27,26 @@ export default function Receiving() {
     api.listDrafts(storeId).then(setDrafts);
   }
   useEffect(load, [storeId]);
+
+  async function removeReceiving(r) {
+    // Spelled out because this is not only a line disappearing from a
+    // list: the ingredients come back off the shelf and the price comes
+    // back out of the average cost.
+    const ok = window.confirm(
+      `ลบรายการซื้อของจาก "${r.supplier || 'ไม่ระบุผู้ขาย'}" ฿${(r.total || 0).toLocaleString()}?\n\n` +
+      'วัตถุดิบที่รับเข้ามาจะถูกหักออกจากสต๊อก และราคาจะถูกถอดออกจากต้นทุนเฉลี่ยด้วย');
+    if (!ok) return;
+    setBusyId(r.id);
+    setListError('');
+    try {
+      await api.deleteReceiving(storeId, r.id);
+      load();
+    } catch (e) {
+      setListError(e.message);
+    } finally {
+      setBusyId('');
+    }
+  }
 
   if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
 
@@ -96,15 +120,30 @@ export default function Receiving() {
         {receivings.length === 0 && (
           <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>ยังไม่มีประวัติการซื้อของ</p>
         )}
+        {listError && (
+          <p style={{ fontSize: 12, color: 'var(--text-danger)', margin: '0 0 10px' }}>{listError}</p>
+        )}
         {receivings.map((r, idx) => (
           <div key={r.id} style={{
             padding: '12px 0',
             borderBottom: idx < receivings.length - 1 ? '0.5px solid var(--border)' : 'none',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <span style={{ fontSize: 14 }}>{r.supplier || 'ไม่ระบุผู้ขาย'}</span>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4,
+            }}>
+              <span style={{ fontSize: 14, flex: 1, minWidth: 0 }}>
+                {r.supplier || 'ไม่ระบุผู้ขาย'}
+              </span>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.date}</span>
               <span style={{ fontSize: 14 }}>฿{(r.total || 0).toLocaleString()}</span>
+              <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
+                <button onClick={() => setEditingReceiving(r)} disabled={busyId === r.id}
+                  style={{ fontSize: 11, padding: '4px 8px' }}>แก้ไข</button>
+                <button onClick={() => removeReceiving(r)} disabled={busyId === r.id}
+                  style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text-danger)' }}>
+                  {busyId === r.id ? '...' : 'ลบ'}
+                </button>
+              </span>
             </div>
             {(r.items || []).map((it, i) => (
               <div key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', paddingLeft: 8 }}>
@@ -115,10 +154,12 @@ export default function Receiving() {
         ))}
       </div>
 
-      {showForm && (
+      {(showForm || editingReceiving) && (
         <ReceivingForm materials={materials} onMaterialsChanged={load}
-          onCancel={() => setShowForm(false)}
-          onSaved={() => { setShowForm(false); load(); }} storeId={storeId} />
+          receiving={editingReceiving}
+          onCancel={() => { setShowForm(false); setEditingReceiving(null); }}
+          onSaved={() => { setShowForm(false); setEditingReceiving(null); load(); }}
+          storeId={storeId} />
       )}
 
       {reviewingDraft && (
@@ -500,10 +541,16 @@ function QuickCreateMaterial({ storeId, defaultName, defaultUnit, onCancel, onCr
   );
 }
 
-function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChanged }) {
-  const [supplier, setSupplier] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [rows, setRows] = useState([]);
+function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChanged,
+                        receiving }) {
+  // The same form for recording and for correcting: correcting is not a
+  // different job, it is the same one done again with the right numbers.
+  const isEdit = !!receiving?.id;
+  const [supplier, setSupplier] = useState(receiving?.supplier || '');
+  const [date, setDate] = useState(receiving?.date || new Date().toISOString().slice(0, 10));
+  const [rows, setRows] = useState(() => (receiving?.items || []).map((i) => ({
+    material_id: i.material_id, quantity: i.quantity, unit_cost: i.unit_cost,
+  })));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -539,7 +586,8 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChang
     setSaving(true);
     setError('');
     try {
-      await api.addReceiving(storeId, { supplier, date, items: valid });
+      if (isEdit) await api.updateReceiving(storeId, receiving.id, { supplier, date, items: valid });
+      else await api.addReceiving(storeId, { supplier, date, items: valid });
       onSaved();
     } catch (e) {
       setError(`บันทึกไม่สำเร็จ: ${e.message}`);
@@ -552,7 +600,15 @@ function ReceivingForm({ materials, onCancel, onSaved, storeId, onMaterialsChang
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-box" style={{ width: 460, maxWidth: '92vw', maxHeight: '80vh', overflowY: 'auto' }}
         onClick={(e) => e.stopPropagation()}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกใบส่งของ</p>
+        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 6px' }}>
+          {isEdit ? 'แก้ไขรายการซื้อของ' : 'บันทึกใบส่งของ'}
+        </p>
+        {isEdit && (
+          <p style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '0 0 14px' }}>
+            บันทึกแล้วระบบจะปรับสต๊อกและต้นทุนเฉลี่ยตามตัวเลขใหม่ให้เอง
+          </p>
+        )}
+        {!isEdit && <div style={{ height: 10 }} />}
 
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ผู้ขาย / ซัพพลายเออร์</label>
         <input value={supplier} onChange={(e) => setSupplier(e.target.value)}
