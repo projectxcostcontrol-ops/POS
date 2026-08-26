@@ -8,7 +8,27 @@ const YEARS = [now.getFullYear() - 1, now.getFullYear()];
 const MONTH_NAMES = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
   'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 
-/** The selected period as the API wants it: an instant, not a date. */
+/**
+ * The selected period as plain dates, YYYY-MM-DD.
+ *
+ * Not derived from the ISO instants below by slicing off the time: local
+ * midnight on 1 August is 31 July in UTC from Bangkok, so the slice
+ * lands a day early and pulls in a delivery from the month before.
+ * Expenses and deliveries are dated by day, so they are compared as
+ * days - which is also the only timezone-proof way to do it.
+ */
+function periodDates(year, month) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const last = month === ''
+    ? new Date(year, 11, 31)
+    : new Date(year, parseInt(month) + 1, 0);   // day 0 of next month
+  return {
+    fromDate: month === '' ? `${year}-01-01` : `${year}-${pad(parseInt(month) + 1)}-01`,
+    toDate: `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`,
+  };
+}
+
+/** The same period as instants, which is what the sales endpoints want. */
 function periodWindow(year, month) {
   const start = month === ''
     ? new Date(year, 0, 1)
@@ -46,11 +66,14 @@ export default function IncomeExpense() {
   useEffect(() => {
     if (!storeId) return;
     const { from, to } = periodWindow(year, month);
+    const { fromDate, toDate } = periodDates(year, month);
     setLoading(true);
     setError('');
     Promise.all([
-      api.getSalesOverview(storeId, from, to, 'day', 0),
-      api.getReceivings(storeId),
+      // No comparison window: this page shows no percentage against last
+      // month, and asking for one costs a second read of the same size.
+      api.getSalesOverview(storeId, from, to, 'day', 0, false),
+      api.getReceivings(storeId, fromDate, toDate),
       api.getMaterials(storeId),
     ])
       .then(([sales, deliveries, mats]) => {
@@ -68,10 +91,16 @@ export default function IncomeExpense() {
 
   if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
 
+  // Dates on expenses and deliveries are days, not instants - both come
+  // from a date input as YYYY-MM-DD. Parsing them into a Date reads them
+  // as UTC midnight and then asks a local-time question of the answer,
+  // which lands on the wrong month at either end depending on the
+  // timezone. Comparing the strings asks the question they were written
+  // to answer.
+  const { fromDate: periodFrom, toDate: periodTo } = periodDates(year, month);
   const inPeriod = (dateStr) => {
-    const d = new Date(dateStr);
-    if (isNaN(d)) return false;
-    return d.getFullYear() === year && (month === '' || d.getMonth() === parseInt(month));
+    const day = String(dateStr || '').slice(0, 10);
+    return day >= periodFrom && day <= periodTo;
   };
 
   const income = overview?.total || 0;

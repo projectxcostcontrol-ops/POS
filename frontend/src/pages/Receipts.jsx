@@ -64,7 +64,7 @@ export default function Receipts() {
       // `top=0` asks for every sold item. The backend still does the
       // aggregation in the same sales read and ranks by quantity, so the
       // summary card does not need another request or bill-by-bill maths.
-      api.getSalesOverview(storeId, from, to, 'day', 0),
+      api.getSalesOverview(storeId, from, to, 'day', 0, false),
       api.getDailySales(storeId, from, to),
     ])
       .then(([s, d]) => { setSummary(s); setDays(d); })

@@ -16,12 +16,41 @@ is a hole in the same wall.
 from __future__ import annotations
 
 
+def normalize_date(value) -> str:
+    """A delivery date, as YYYY-MM-DD.
+
+    One shape, because this field is queried as a range and Firestore
+    compares strings: "2026-08-15" and "2026-08-15T00:00:00Z" are the
+    same day that sort as different text, and a delivery written in the
+    second form silently falls out of every month that should contain
+    it - taking its cost with it, which makes profit look better than it
+    was. The date input sends the short form and the invoice scanner is
+    asked for it, so this mostly guards the odd one that slips through.
+
+    Anything unrecognisable is passed along untouched rather than
+    dropped: a date we cannot read is still the shop's data, and losing
+    it is worse than sorting it oddly.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        head = text[:10]
+        try:
+            y, m, d = int(head[:4]), int(head[5:7]), int(head[8:10])
+        except ValueError:
+            return text
+        if 1 <= m <= 12 and 1 <= d <= 31 and y > 1900:
+            return head
+    return text
+
+
 class ReceivingError(ValueError):
     """Message is meant to be shown to the person who typed it."""
 
 
 def clean_receiving(supplier, date, items, note="") -> dict:
-    date = (date or "").strip()
+    date = normalize_date(date)
     if not date:
         raise ReceivingError("กรุณาใส่วันที่รับของ")
 

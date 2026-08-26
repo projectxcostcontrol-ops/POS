@@ -602,8 +602,23 @@ class Store:
                 note=f"รับของจาก {supplier}", occurred_at=date, ref=receiving_id,
             )
 
-    def list_receivings(self, store_id: str) -> list[dict]:
-        records = [d.to_dict() | {"id": d.id} for d in self._col(store_id, "receivings").stream()]
+    def list_receivings(self, store_id: str, start: str | None = None,
+                        end: str | None = None) -> list[dict]:
+        """Deliveries, newest first, optionally within a date range.
+
+        The range is pushed down to Firestore. A screen that only wants
+        one month should not pay for every delivery the shop has ever
+        taken - that cost grows forever while the question stays the same
+        size, which is the same trap list_sales used to have.
+
+        Bounds are YYYY-MM-DD, matching what normalize_date stores.
+        """
+        query = self._col(store_id, "receivings")
+        if start:
+            query = query.where("date", ">=", start)
+        if end:
+            query = query.where("date", "<=", end)
+        records = [d.to_dict() | {"id": d.id} for d in query.stream()]
         records.sort(key=lambda r: r.get("date", ""), reverse=True)
         return records
 

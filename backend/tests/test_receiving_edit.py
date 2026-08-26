@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tests.fake_firestore import make_test_store, FakeDb
 from storage.movement_ledger import MovementLedger
-from core.receiving import clean_receiving, ReceivingError
+from core.receiving import clean_receiving, normalize_date, ReceivingError
 
 _results = []
 
@@ -198,6 +198,49 @@ def test_the_shapes_that_are_refused():
     check("supplier may be blank", free["supplier"], "")
 
 
+def test_dates_are_stored_in_one_shape():
+    section("Delivery dates are stored as days, in one shape")
+    # This field is queried as a range and Firestore compares strings, so
+    # "2026-08-15" and "2026-08-15T00:00:00Z" are the same day that sort
+    # as different text - and the second falls out of every month that
+    # should contain it, taking its cost with it.
+    check("a plain day is left alone", normalize_date("2026-08-15"), "2026-08-15")
+    check("an instant is cut to its day",
+          normalize_date("2026-08-15T09:30:00.000Z"), "2026-08-15")
+    check("padding is trimmed", normalize_date("  2026-08-15  "), "2026-08-15")
+    check("empty stays empty", normalize_date(None), "")
+    # Unreadable is kept, not dropped: a date we cannot parse is still
+    # the shop's data, and losing it is worse than sorting it oddly.
+    check("something unreadable is kept", normalize_date("ส.ค. 15"), "ส.ค. 15")
+
+    r = clean_receiving(supplier="เจ๊หมวย", date="2026-08-15T09:30:00.000Z",
+                        items=[{"material_id": "duck", "quantity": 1, "unit_cost": 10}])
+    check("and recording normalises it", r["date"], "2026-08-15")
+
+
+def test_only_the_months_deliveries_are_read():
+    section("Asking for one month reads that month, not the whole history")
+    # The same trap list_sales used to have: a screen that wants one
+    # month should not pay for every delivery the shop has ever taken.
+    db, store, ledger = kitchen()
+    for day in range(1, 29):
+        store.add_receiving("b1", "เจ๊หมวย", f"2026-07-{day:02d}",
+                            [{"material_id": "duck", "quantity": 1, "unit_cost": 100}])
+    for day in range(1, 4):
+        store.add_receiving("b1", "เจ๊หมวย", f"2026-08-{day:02d}",
+                            [{"material_id": "duck", "quantity": 1, "unit_cost": 100}])
+
+    db.reset_meter()
+    august = store.list_receivings("b1", "2026-08-01", "2026-08-31")
+
+    check("only August came back", len(august), 3)
+    check("and only August was read", db.reads, 3)
+    check("newest first", august[0]["date"], "2026-08-03")
+
+    everything = store.list_receivings("b1")
+    check("without a range, all of it", len(everything), 31)
+
+
 def main():
     print("Running receiving edit/delete tests (offline)")
 
@@ -207,6 +250,8 @@ def main():
     test_a_multi_line_delivery_reverts_every_line()
     test_other_deliveries_are_untouched()
     test_the_shapes_that_are_refused()
+    test_dates_are_stored_in_one_shape()
+    test_only_the_months_deliveries_are_read()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

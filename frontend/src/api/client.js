@@ -88,7 +88,10 @@ export const api = {
   rebuildStockSnapshot: (storeId) =>
     request(`/api/${storeId}/rebuild-stock-snapshot`, { method: 'POST' }),
 
-  getReceivings: (storeId) => request(`/api/${storeId}/receivings`),
+  /** Dates are YYYY-MM-DD. Without them, every delivery the shop ever took. */
+  getReceivings: (storeId, from, to) =>
+    request(`/api/${storeId}/receivings${from && to
+      ? `?from_=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : ''}`),
   addReceiving: (storeId, data) =>
     request(`/api/${storeId}/receivings`, { method: 'POST', body: JSON.stringify(data) }),
   /**
@@ -205,10 +208,17 @@ export const api = {
   // ---- sales reporting (reads our saved copy, not the POS) ----
   // One call for the whole sales screen. Splitting it meant the same
   // window of sales was fetched twice over.
-  getSalesOverview: (storeId, from, to, granularity = 'day', top = 5) =>
+  /**
+   * `compare` reads a second window the same length as the first, purely
+   * to work out a percentage against the previous period. For a month
+   * that is as many documents again as the answer itself, so pass false
+   * anywhere the arrow isn't shown.
+   */
+  getSalesOverview: (storeId, from, to, granularity = 'day', top = 5, compare = true) =>
     // getTimezoneOffset() counts the opposite way to what the API wants.
     request(`/api/${storeId}/sales/overview?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}&granularity=${granularity}&top=${top}` +
+      `&compare=${compare}` +
       `&tz_offset=${-new Date().getTimezoneOffset()}`),
   getDailySales: (storeId, from, to) =>
     request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +

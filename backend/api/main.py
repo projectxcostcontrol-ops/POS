@@ -33,7 +33,7 @@ from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
 from core.expenses import clean_expense, ExpenseError
-from core.receiving import clean_receiving, ReceivingError
+from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
                            is_pos_sale)
 from core.unit_conversion import apply_unit_conversion
@@ -720,8 +720,11 @@ def rebuild_stock_snapshot(store_id: str, c: Ctx = Depends(store_settings)):
 # ---- receiving ---------------------------------------------------------
 
 @app.get("/api/{store_id}/receivings")
-def list_receivings(store_id: str, c: Ctx = Depends(store_ctx)):
-    return c.store.list_receivings(store_id)
+def list_receivings(store_id: str, from_: str | None = None, to: str | None = None,
+                    c: Ctx = Depends(store_ctx)):
+    """Dates are YYYY-MM-DD. Without them, every delivery ever taken."""
+    return c.store.list_receivings(store_id, normalize_date(from_) or None,
+                                   normalize_date(to) or None)
 
 
 def _clean_receiving(data: dict) -> dict:
@@ -942,10 +945,19 @@ def confirm_draft(store_id: str, draft_id: str, c: Ctx = Depends(store_ctx)):
     if not receiving_items:
         raise HTTPException(400, "ไม่มีรายการที่จับคู่วัตถุดิบแล้วเลย - เลือกวัตถุดิบให้แต่ละรายการก่อน")
 
-    result = c.store.add_receiving(
-        store_id, supplier=draft.get("supplier") or "", date=draft.get("date") or "",
-        items=receiving_items, note=f"จากสแกน AI (draft {draft_id})",
-    )
+    # Through the same validation the form uses, so a scanned delivery
+    # cannot enter in a shape a typed one would have been refused in.
+    # A scan that found no date falls back to today rather than storing
+    # an empty one, which would sort below everything and belong to no
+    # month at all - invisible in every report that filters by period.
+    r = _clean_receiving({
+        "supplier": draft.get("supplier") or "",
+        "date": draft.get("date") or _today(),
+        "items": receiving_items,
+        "note": f"จากสแกน AI (draft {draft_id})",
+    })
+    result = c.store.add_receiving(store_id, supplier=r["supplier"], date=r["date"],
+                                   items=r["items"], note=r["note"])
     c.store.delete_draft(store_id, draft_id)
     return {**result, "skipped_items": skipped}
 
@@ -1093,7 +1105,7 @@ def _recipes_for(c: Ctx, store_id: str, sales: list[dict]) -> dict:
 @app.get("/api/{store_id}/sales/overview")
 def sales_overview(store_id: str, from_: str | None = None, to: str | None = None,
                    granularity: str = "day", tz_offset: int = 0, top: int = 5,
-                   c: Ctx = Depends(store_money)):
+                   compare: bool = True, c: Ctx = Depends(store_money)):
     """Everything the sales screens show, from one read of the data.
 
     The summary, the chart and the best-sellers used to be three
@@ -1112,16 +1124,24 @@ def sales_overview(store_id: str, from_: str | None = None, to: str | None = Non
 
     current = sales_report.summarise(sales, recipes, materials, granularity, tz_offset)
 
-    # The comparison only needs a total, so it skips the recipe lookups
-    # and material costing that the current window does.
-    p_start, p_end = sales_report.previous_window(start, end)
-    previous = sales_report.summarise(
-        c.store.list_sales(store_id, p_start, p_end), {}, [], granularity, tz_offset)
+    # The comparison reads a second window of the same length, which for
+    # a month is as many documents again as the answer itself. Only the
+    # home screen shows it; the sales and income pages were paying twice
+    # for a figure they never displayed, so they now ask for it off.
+    #
+    # It skips the recipe lookups and material costing either way - a
+    # percentage against last month needs a total, nothing more.
+    comparison = None
+    if compare:
+        p_start, p_end = sales_report.previous_window(start, end)
+        previous = sales_report.summarise(
+            c.store.list_sales(store_id, p_start, p_end), {}, [], granularity, tz_offset)
+        comparison = sales_report.compare_previous(current, previous)
 
     return {
         **current,
         "from": start, "to": end, "granularity": granularity,
-        "compare": sales_report.compare_previous(current, previous),
+        "compare": comparison,
         "top_items": sales_report.top_items(sales, top),
     }
 
