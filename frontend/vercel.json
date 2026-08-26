@@ -2,6 +2,8 @@
   "rewrites": [
     { "source": "/menu/hong-duck", "destination": "/menu/hong-duck/index.html" },
     { "source": "/menu/hong-duck/", "destination": "/menu/hong-duck/index.html" },
+    { "source": "/q/hong-duck", "destination": "/q/hong-duck/index.html" },
+    { "source": "/q/hong-duck/", "destination": "/q/hong-duck/index.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

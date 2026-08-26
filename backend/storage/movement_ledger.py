@@ -191,6 +191,38 @@ class MovementLedger:
         movements.sort(key=lambda m: m.get("occurred_at", ""), reverse=True)
         return movements
 
+    def list_by_ref(self, store_id: str, ref: str) -> list[dict]:
+        """Every movement written against one source document - a
+        delivery note, a stock count, a receipt."""
+        return [d.to_dict() | {"id": d.id}
+                for d in self._col(store_id).where("ref", "==", ref).stream()]
+
+    def delete_by_ref(self, store_id: str, ref: str) -> int:
+        """Remove the movements one sale produced, as if it never happened.
+
+        The ledger otherwise never deletes: a correction is a new
+        movement, because the discrepancy it corrects is itself
+        information about the kitchen. This is the exception, and a
+        narrow one - an order typed in by mistake is not information
+        about anything, and reversing it with an opposite movement would
+        leave the variance report counting the ingredients as used AND
+        returned, inflating expected usage on both sides.
+
+        The caller is responsible for refusing this once a stock count
+        has closed over the period: the count wrote a delta to land on a
+        number that included these movements, so removing them
+        afterwards moves the shelf figure away from what was physically
+        counted.
+        """
+        col = self._col(store_id)
+        movements = self.list_by_ref(store_id, ref)
+        for m in movements:
+            col.document(m["id"]).delete()
+            bump = self._snapshot_bump({**m, "quantity": -(m.get("quantity") or 0)})
+            if bump:
+                self.store.material_ref(store_id, m["material_id"]).set(bump, merge=True)
+        return len(movements)
+
     def current_stock(self, store_id: str, material_id: str) -> float:
         """One read when the snapshot is there, a full scan of this
         material's history when it isn't - correct either way."""

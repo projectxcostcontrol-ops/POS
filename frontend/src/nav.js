@@ -35,6 +35,10 @@ export const REGULAR = [
   // finishing a count and having to go find the answer somewhere else is
   // how people stopped looking at it.
   { to: '/stock-count', icon: ClipboardText, label: 'เช็กสต๊อกวัตถุดิบ' },
+  // Used many times a day, but the phone's bottom bar only holds three
+  // and the three it holds are used more. First in this list instead.
+  { to: '/delivery-orders', icon: Moped, label: 'ออเดอร์นอกร้าน',
+    needs: 'view_money' },
   { to: '/receipts', icon: Receipt, label: 'รายการขาย',
     was: 'รายการบิล', needs: 'view_money' },
   { to: '/income-expense', icon: Wallet, label: 'รายรับรายจ่าย',
@@ -69,5 +73,5 @@ export const TABS = [
 ];
 import {
   House, Package, ShoppingCart, ClipboardText, Receipt, Wallet,
-  GearSix, CookingPot, Tag, Users, PlugsConnected, List,
+  GearSix, CookingPot, Tag, Users, PlugsConnected, List, Moped,
 } from '@phosphor-icons/react';

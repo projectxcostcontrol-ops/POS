@@ -14,6 +14,7 @@ import Receiving from './pages/Receiving';
 import Recipes from './pages/Recipes';
 import StockCount from './pages/StockCount';
 import Receipts from './pages/Receipts';
+import DeliveryOrders from './pages/DeliveryOrders';
 import IncomeExpense from './pages/IncomeExpense';
 import Settings from './pages/Settings';
 import Users from './pages/Users';
@@ -89,6 +90,7 @@ function AppShell() {
             {/* Merged into นับของ - kept as a redirect so an old bookmark
                 or a link someone shared still lands somewhere useful. */}
             <Route path="/variance" element={<Navigate to="/stock-count" replace />} />
+            <Route path="/delivery-orders" element={can('view_money') ? <DeliveryOrders /> : <Navigate to={homePath} replace />} />
             <Route path="/receipts" element={can('view_money') ? <Receipts /> : <Navigate to={homePath} replace />} />
             <Route path="/income-expense" element={can('view_money') ? <IncomeExpense /> : <Navigate to={homePath} replace />} />
             <Route path="/users" element={can('manage_users') ? <Users /> : <Navigate to={homePath} replace />} />

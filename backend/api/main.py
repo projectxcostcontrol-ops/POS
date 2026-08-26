@@ -9,9 +9,11 @@ goes through a Store already scoped to that tenant. See api/deps.py.
 
 import asyncio
 import os
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 import requests
 from fastapi import FastAPI, HTTPException, UploadFile, File, Response, Depends
@@ -22,7 +24,7 @@ from adapters.loyverse_adapter import LoyverseAdapter
 from adapters._loyverse_client import normalize_time
 from storage.firestore_store import Store
 from storage.movement_ledger import MovementLedger
-from core.stock_engine import sync_branch
+from core.stock_engine import sync_branch, deductions_for
 from core.vision_chain import build_default_chain
 from core.vision_provider import VisionError
 from core.matching_engine import MatchingEngine
@@ -31,6 +33,8 @@ from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
 from core.expenses import clean_expense, ExpenseError
+from core.delivery import (CHANNELS, DeliveryError, clean_order,
+                           is_pos_sale)
 from core.unit_conversion import apply_unit_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
@@ -84,6 +88,40 @@ def _now() -> str:
 
 def _today() -> str:
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def _thai_today() -> str:
+    return datetime.now(timezone(timedelta(hours=7))).date().isoformat()
+
+
+_QR_SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_QR_SPOT = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_QR_DEFAULTS = {
+    "hong-duck": {
+        "label": "ฮง เป็ดย่าง",
+        "target_url": "https://rankrua.vercel.app/menu/hong-duck",
+    },
+}
+
+
+def _clean_qr_slug(value: str) -> str:
+    value = (value or "").strip().lower()
+    if not _QR_SLUG.fullmatch(value):
+        raise HTTPException(404, "ไม่พบ QR Code นี้")
+    return value
+
+
+def _clean_qr_spot(value: str) -> str:
+    value = (value or "default").strip().lower()
+    return value if _QR_SPOT.fullmatch(value) else "default"
+
+
+def _valid_public_target(value: str) -> str:
+    value = (value or "").strip()
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise HTTPException(400, "ปลายทาง QR ต้องเป็น URL แบบ https")
+    return value
 
 
 # ---- per-request context ----------------------------------------------
@@ -279,6 +317,52 @@ async def lifespan(_app: FastAPI):
 
 
 app.router.lifespan_context = lifespan
+
+
+# ---- public dynamic QR links ------------------------------------------
+
+@app.get("/api/public/qr/{slug}")
+def resolve_public_qr(slug: str, spot: str = "default"):
+    """Resolve and count a scan without collecting IP or device data."""
+    slug = _clean_qr_slug(slug)
+    spot = _clean_qr_spot(spot)
+    link = root_store.get_qr_link(slug)
+    if not link:
+        default = _QR_DEFAULTS.get(slug)
+        if not default:
+            raise HTTPException(404, "ไม่พบ QR Code นี้")
+        link = root_store.set_qr_link(slug, {
+            **default,
+            "enabled": True,
+            "total_scans": 0,
+            "created_at": _now(),
+            "updated_at": _now(),
+        })
+    if not link.get("enabled", True):
+        raise HTTPException(404, "QR Code นี้ยังไม่เปิดใช้งาน")
+    scanned_at = _now()
+    root_store.record_qr_scan(slug, spot, _thai_today(), scanned_at)
+    return {"target_url": link["target_url"]}
+
+
+@app.put("/api/admin/qr-links/{slug}")
+def update_public_qr(slug: str, data: dict, _admin: dict = Depends(current_admin)):
+    """Change a printed QR's destination without changing the QR itself."""
+    slug = _clean_qr_slug(slug)
+    return root_store.set_qr_link(slug, {
+        "label": (data.get("label") or slug).strip()[:120],
+        "target_url": _valid_public_target(data.get("target_url")),
+        "enabled": bool(data.get("enabled", True)),
+        "updated_at": _now(),
+    })
+
+
+@app.get("/api/admin/qr-links/{slug}/stats")
+def public_qr_stats(slug: str, _admin: dict = Depends(current_admin)):
+    stats = root_store.get_qr_stats(_clean_qr_slug(slug))
+    if not stats:
+        raise HTTPException(404, "ไม่พบ QR Code นี้")
+    return stats
 
 
 # ---- signup ------------------------------------------------------------
@@ -1041,7 +1125,14 @@ def reconcile_sales(store_id: str, days: int = 1, c: Ctx = Depends(store_money))
             raise HTTPException(402, "แพ็กเกจ Loyverse ดึงย้อนหลังได้ไม่เกิน 30 วัน")
         raise
 
-    saved = c.store.list_sales(store_id, start_iso, normalize_time(now.isoformat()))
+    # Only what the POS produced. Orders recorded by hand - Grab, phone,
+    # the online menu - are real sales in the same collection, and the
+    # POS has never heard of them: counted here they would report as
+    # missing forever, and the home screen's "อัปเดตข้อมูล" button would
+    # try to repair them on every single press.
+    saved = [s for s in c.store.list_sales(store_id, start_iso,
+                                           normalize_time(now.isoformat()))
+             if is_pos_sale(s)]
     saved_by_number = {s.get("receipt_number"): s for s in saved}
 
     missing = []
@@ -1343,6 +1434,106 @@ def list_receipts(store_id: str, created_at_min: str | None = None,
                 402, "แพ็กเกจ Loyverse ที่ใช้อยู่ดูประวัติการขายย้อนหลังได้ไม่เกิน 31 วัน "
                      "- ถ้าต้องการมากกว่านี้ ต้องสมัคร Unlimited sales history ที่ Loyverse")
         raise
+
+
+# ---- orders the till never saw --------------------------------------
+# Grab, LINE MAN, the phone, the online menu. Recorded as ordinary sales
+# so every report already includes them, and deducted through the same
+# recipes so the shelf figure stays true. See core/delivery.py.
+
+@app.get("/api/{store_id}/delivery-orders")
+def list_delivery_orders(store_id: str, from_: str | None = None,
+                         to: str | None = None, c: Ctx = Depends(store_money)):
+    start, end = _window(from_, to)
+    orders = [s for s in c.store.list_sales(store_id, start, end)
+              if not is_pos_sale(s)]
+    orders.sort(key=lambda s: s.get("date") or "", reverse=True)
+    return {"channels": CHANNELS, "from": start, "to": end, "orders": orders}
+
+
+@app.post("/api/{store_id}/delivery-orders")
+def add_delivery_order(store_id: str, data: dict, c: Ctx = Depends(store_money)):
+    """data: {order_id, source, items: [{name, qty, price}], date, note}
+
+    `order_id` comes from the browser rather than being generated here,
+    which is what makes a retry safe: a request that times out and is
+    sent again carries the same id, and the second one is refused
+    instead of deducting the same dish twice.
+    """
+    try:
+        row = clean_order(data.get("order_id"), data.get("source"),
+                          data.get("items"), data.get("date"), data.get("note", ""))
+    except DeliveryError as e:
+        raise HTTPException(400, str(e))
+
+    # Into the one canonical timestamp format the saved sales use. Range
+    # queries on this collection are ordered string comparisons, so
+    # '...T12:00:00.000Z' and '...T12:00:00+00:00' are the same instant
+    # that compare as different text - and an order written in the wrong
+    # one falls out of every date range that should contain it.
+    row["date"] = normalize_time(row["date"]) or row["date"]
+    row["recorded_at"] = row["date"]
+
+    number = row["receipt_number"]
+    if c.store.get_sale(store_id, number):
+        raise HTTPException(409, "บันทึกออเดอร์นี้ไปแล้ว")
+
+    # Saved before stock moves, deliberately. That order means a failure
+    # in between leaves an order with no deduction - visible, and fixable
+    # by deleting it - rather than ingredients off the shelf with nothing
+    # recording why.
+    c.store.save_sale(store_id, number, row)
+
+    recipes = c.store.all_recipes(store_id)
+    known = set(c.store.list_material_ids(store_id))
+    rows, unknown = deductions_for(
+        recipes, known, [(i["name"], i["qty"]) for i in row["items"]],
+        ref=f"receipt:{number}")
+    c.store.deduct_stock_bulk(store_id, rows)
+
+    return {
+        "ok": True,
+        "order": row,
+        "deducted_materials": len(rows),
+        # A dish with no recipe deducts nothing. That is not an error -
+        # drinks and resale goods often have none - but it is worth
+        # saying, because "stock didn't move" otherwise looks like a bug.
+        "no_recipe": sorted({i["name"] for i in row["items"]
+                             if not recipes.get(i["name"])}),
+        "unknown_materials": sorted(m for m in unknown if m),
+    }
+
+
+@app.delete("/api/{store_id}/delivery-orders/{order_id}")
+def delete_delivery_order(store_id: str, order_id: str,
+                          c: Ctx = Depends(store_money)):
+    """Removes the order and puts its ingredients back, as if it was
+    never typed.
+
+    Only orders recorded by hand. A receipt that came from the POS is
+    refused with a 404 - deleting one here would not remove it from
+    Loyverse, so the next sync would bring it straight back, having
+    deducted its stock a second time on the way.
+    """
+    sale = c.store.get_sale(store_id, order_id)
+    if not sale or is_pos_sale(sale):
+        raise HTTPException(404, "ไม่พบออเดอร์นี้")
+
+    # Refused once a count has closed over it. The count wrote a
+    # correction to land on a number that already included these
+    # ingredients; taking them back now moves the shelf figure away from
+    # what someone physically counted, which is the one number in the
+    # system that was actually measured.
+    closed = [s.get("closed_at") for s in c.store.list_count_sessions(store_id)
+              if s.get("status") == "closed" and s.get("closed_at")]
+    if closed and max(closed) > (sale.get("date") or ""):
+        raise HTTPException(
+            400, "ลบไม่ได้ - มีการนับสต๊อกหลังออเดอร์นี้แล้ว "
+                 "ถ้ายอดผิดให้แก้ด้วยการนับสต๊อกรอบใหม่แทน")
+
+    returned = c.ledger.delete_by_ref(store_id, f"receipt:{order_id}")
+    c.store.delete_sale(store_id, order_id)
+    return {"ok": True, "returned_materials": returned}
 
 
 @app.post("/api/{store_id}/sync")

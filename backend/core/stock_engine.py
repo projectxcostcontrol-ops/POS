@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone, timedelta
 
+from core.delivery import POS_SOURCE
 from core.pos_provider import PosProvider
 from storage.firestore_store import Store
 
@@ -158,21 +159,12 @@ def _apply(store: Store, store_id: str, receipts: list[dict],
             recipes = store.all_recipes(store_id)
             known_materials = set(store.list_material_ids(store_id))
 
-        for line in receipt.get("line_items", []):
-            for ing in recipes.get(line.get("item_name")) or []:
-                material_id = ing.get("material_id")
-                if material_id not in known_materials:
-                    # The ingredient was deleted but a recipe still names
-                    # it. Skipping keeps the rest of the bill deducting;
-                    # collecting the name means it gets reported instead
-                    # of quietly going missing.
-                    unknown_materials.add(material_id)
-                    continue
-                deductions.append({
-                    "material_id": material_id,
-                    "quantity": (ing.get("qty") or 0) * (line.get("quantity") or 0),
-                    "ref": f"receipt:{number}",
-                })
+        rows, unknown = deductions_for(
+            recipes, known_materials,
+            [(li.get("item_name"), li.get("quantity")) for li in receipt.get("line_items", [])],
+            ref=f"receipt:{number}")
+        deductions.extend(rows)
+        unknown_materials |= unknown
         to_mark.append(number)
         deducted += 1
 
@@ -199,11 +191,45 @@ def _apply(store: Store, store_id: str, receipts: list[dict],
     }
 
 
+def deductions_for(recipes: dict, known_materials: set, lines,
+                   ref: str) -> tuple[list[dict], set]:
+    """What one sale takes off the shelves.
+
+    `lines` is [(menu name, quantity sold)]. Shared by the POS sync and
+    by an order recorded by hand, because those two must deduct
+    identically - a Grab order and a walk-in for the same dish take the
+    same ingredients, and two code paths computing that separately is
+    two places for it to be wrong.
+
+    A recipe naming an ingredient that has since been deleted is skipped
+    and its name returned, rather than written against a material that
+    no longer exists. Skipping keeps the rest of the bill deducting;
+    returning the name is what stops it going missing quietly.
+    """
+    rows, unknown = [], set()
+    for name, quantity in lines:
+        for ing in recipes.get(name) or []:
+            material_id = ing.get("material_id")
+            if material_id not in known_materials:
+                unknown.add(material_id)
+                continue
+            rows.append({
+                "material_id": material_id,
+                "quantity": (ing.get("qty") or 0) * (quantity or 0),
+                "ref": ref,
+            })
+    return rows, unknown
+
+
 def _sale_row(receipt: dict) -> dict:
     """The fields reports need. Everything else is re-fetchable from the
     POS while it's still in their window, and dead weight afterwards."""
     return {
         "receipt_number": receipt.get("receipt_number"),
+        # Where this sale came from. Rows written before this field
+        # existed have none, and are read as POS sales - see
+        # core/delivery.source_of.
+        "source": POS_SOURCE,
         # The sale time - what reports group by. A 7pm sale belongs to 7pm
         # even if a delayed terminal only uploaded it at midnight.
         "date": receipt.get("created_at") or "",

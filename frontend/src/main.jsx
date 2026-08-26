@@ -14,10 +14,14 @@ import './pages/HongDuckMenu.css'
 // customer-facing menu.
 const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
 const isHongDuckMenu = normalizedPath === '/menu/hong-duck'
+const isHongDuckQr = normalizedPath === '/q/hong-duck'
 if (isHongDuckMenu) document.title = 'เมนูฮง เป็ดย่าง | สาขาสี่แยกวิทยาลัยพยาบาล'
+if (isHongDuckQr) document.title = 'กำลังเปิดเมนูฮง เป็ดย่าง'
 const appModule = isHongDuckMenu
   ? import('./pages/HongDuckMenu.jsx')
-  : import('./App.jsx')
+  : isHongDuckQr
+    ? import('./pages/QrRedirect.jsx')
+    : import('./App.jsx')
 
 appModule.then(({ default: App }) => {
   ReactDOM.createRoot(document.getElementById('root')).render(

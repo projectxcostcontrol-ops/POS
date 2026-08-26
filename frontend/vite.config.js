@@ -8,6 +8,7 @@ export default defineConfig({
       input: {
         app: 'index.html',
         hongDuckMenu: 'menu/hong-duck/index.html',
+        hongDuckQr: 'q/hong-duck/index.html',
       },
     },
   },

@@ -102,6 +102,26 @@ export const api = {
     return res.json();
   },
 
+  /**
+   * Orders the till never saw - Grab, the phone, the online menu. Saved
+   * as ordinary sales so every report already counts them, and deducted
+   * through the same recipes as a walk-in.
+   *
+   * The order id is generated here rather than by the server, which is
+   * what makes a retry safe: a request that times out and is sent again
+   * carries the same id and the second one is refused, instead of
+   * deducting the same dish twice.
+   */
+  getDeliveryOrders: (storeId, from, to) =>
+    request(`/api/${storeId}/delivery-orders?from_=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+  addDeliveryOrder: (storeId, order) =>
+    request(`/api/${storeId}/delivery-orders`, {
+      method: 'POST', body: JSON.stringify(order),
+    }),
+  deleteDeliveryOrder: (storeId, orderId) =>
+    request(`/api/${storeId}/delivery-orders/${encodeURIComponent(orderId)}`,
+      { method: 'DELETE' }),
+
   getMe: () => request('/api/me'),
   listUsers: () => request('/api/users'),
   /**

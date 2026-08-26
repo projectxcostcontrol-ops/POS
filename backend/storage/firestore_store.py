@@ -153,6 +153,53 @@ class Store:
         self._tenant_doc().collection("app_settings").document("config").set(
             {key: value}, merge=True)
 
+    # ---- public dynamic QR links --------------------------------------
+    # Public slugs exist before a request belongs to a tenant, so only the
+    # root Store and super-admin API may manage this application-wide data.
+    def _qr_links_col(self):
+        return self.db.collection("public_qr_links")
+
+    def get_qr_link(self, slug: str) -> dict | None:
+        doc = self._qr_links_col().document(slug).get()
+        return (doc.to_dict() | {"slug": doc.id}) if doc.exists else None
+
+    def set_qr_link(self, slug: str, data: dict):
+        self._qr_links_col().document(slug).set(data, merge=True)
+        return self.get_qr_link(slug)
+
+    def record_qr_scan(self, slug: str, spot: str, day: str, scanned_at: str):
+        link_ref = self._qr_links_col().document(slug)
+        link_ref.set({
+            "total_scans": self.increment(1),
+            "last_scanned_at": scanned_at,
+        }, merge=True)
+
+        daily_ref = link_ref.collection("daily").document(day)
+        daily_ref.set({
+            "date": day,
+            "total": self.increment(1),
+            "last_scanned_at": scanned_at,
+        }, merge=True)
+        daily_ref.collection("spots").document(spot).set({
+            "spot": spot,
+            "total": self.increment(1),
+            "last_scanned_at": scanned_at,
+        }, merge=True)
+
+    def get_qr_stats(self, slug: str) -> dict | None:
+        link = self.get_qr_link(slug)
+        if not link:
+            return None
+        daily = []
+        link_ref = self._qr_links_col().document(slug)
+        for day_doc in link_ref.collection("daily").stream():
+            row = day_doc.to_dict() or {}
+            spots_ref = link_ref.collection("daily").document(day_doc.id).collection("spots")
+            row["spots"] = [d.to_dict() for d in spots_ref.stream()]
+            daily.append(row)
+        daily.sort(key=lambda row: row.get("date", ""), reverse=True)
+        return {"link": link, "daily": daily}
+
     # ---- Loyverse connections -----------------------------------------
     # One access token is one Loyverse ACCOUNT, and an account is not the
     # same thing as a business. Shops that grew branch by branch often
@@ -752,6 +799,13 @@ class Store:
 
     def save_sale(self, store_id: str, receipt_number: str, data: dict):
         self._col(store_id, "sales").document(receipt_number).set(data)
+
+    def get_sale(self, store_id: str, receipt_number: str) -> dict | None:
+        doc = self._col(store_id, "sales").document(receipt_number).get()
+        return (doc.to_dict() | {"receipt_number": doc.id}) if doc.exists else None
+
+    def delete_sale(self, store_id: str, receipt_number: str):
+        self._col(store_id, "sales").document(receipt_number).delete()
 
     def save_sales_bulk(self, store_id: str, rows: list[tuple[str, dict]]):
         """Write many sales in batched round trips.
