@@ -1,9 +1,25 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BowlFood, ChatCircleDots, ForkKnife, MapPin, Minus, Phone, Plus, Receipt, Trash, X } from '@phosphor-icons/react';
 
 const PHONE_DISPLAY = '082-6516461';
 const PHONE_LINK = '0826516461';
 const LINE_OA_ID = '@862uzpje';
+const STORE_TIME_ZONE = 'Asia/Bangkok';
+const STORE_OPEN_MINUTES = 8 * 60;
+const STORE_CLOSE_MINUTES = 17 * 60;
+
+function isStoreOpenNow() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: STORE_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  const currentMinutes = (hour * 60) + minute;
+  return currentMinutes >= STORE_OPEN_MINUTES && currentMinutes < STORE_CLOSE_MINUTES;
+}
 
 const riceItems = [
   { name: 'ข้าวหน้าเป็ดย่าง', normal: 60, special: 70 },
@@ -34,6 +50,13 @@ export default function HongDuckMenu() {
   const [activeSection, setActiveSection] = useState('rice');
   const [orderItems, setOrderItems] = useState({});
   const [orderOpen, setOrderOpen] = useState(false);
+  const [storeOpen, setStoreOpen] = useState(isStoreOpenNow);
+
+  useEffect(() => {
+    const updateStoreStatus = () => setStoreOpen(isStoreOpenNow());
+    const timer = window.setInterval(updateStoreStatus, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const orderList = useMemo(() => Object.values(orderItems), [orderItems]);
   const orderCount = orderList.reduce((sum, item) => sum + item.quantity, 0);
@@ -93,13 +116,13 @@ export default function HongDuckMenu() {
     <div className="hong-menu-page">
       <header className="hong-hero">
         <div className="hong-brand-row">
-          <img className="hong-brand-logo" src="/menu/hong-duck/logo-transparent.png" alt="ฮง เป็ดย่าง SINCE 2022" />
+          <img className="hong-brand-logo" src="/menu/hong-duck/logo-transparent.png" width="300" height="270" alt="ฮง เป็ดย่าง SINCE 2022" />
           <div className="hong-status-block">
-            <span className="hong-open"><i />เปิดอยู่</span>
+            <span className={`hong-open${storeOpen ? '' : ' closed'}`} title="เวลาเปิดร้าน 08:00–17:00 น."><i />{storeOpen ? 'เปิดอยู่' : 'ปิดอยู่'}</span>
             <span className="hong-branch"><MapPin size={14} />สาขาสี่แยกวิทยาลัยพยาบาล</span>
           </div>
         </div>
-        <img src="/menu/hong-duck/hero-food-v1.png" alt="เป็ดย่าง บะหมี่ และหมูกรอบของร้านฮง เป็ดย่าง" />
+        <img src="/menu/hong-duck/hero-food.webp" width="1200" height="800" decoding="async" fetchpriority="high" alt="เป็ดย่าง บะหมี่ และหมูกรอบของร้านฮง เป็ดย่าง" />
       </header>
 
       <nav className="hong-categories" aria-label="หมวดเมนู">

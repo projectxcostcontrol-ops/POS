@@ -12,8 +12,9 @@ import './pages/HongDuckMenu.css'
 // QR menu pages are public and must not initialize Firebase Auth. Loading
 // the authenticated app lazily also keeps its larger bundle out of the
 // customer-facing menu.
-const isHongDuckMenu = window.location.pathname === '/menu/hong-duck'
-if (isHongDuckMenu) document.title = 'เมนู | ฮง เป็ดย่าง'
+const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
+const isHongDuckMenu = normalizedPath === '/menu/hong-duck'
+if (isHongDuckMenu) document.title = 'เมนูฮง เป็ดย่าง | สาขาสี่แยกวิทยาลัยพยาบาล'
 const appModule = isHongDuckMenu
   ? import('./pages/HongDuckMenu.jsx')
   : import('./App.jsx')

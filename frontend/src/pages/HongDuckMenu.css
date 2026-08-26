@@ -20,6 +20,8 @@
 .hong-branch { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border-radius: 8px; color: var(--hong-cream); background: rgba(116,8,6,.66); font-size: 10px; white-space: nowrap; }
 .hong-open { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid var(--hong-gold); border-radius: 999px; color: var(--hong-cream); background: rgba(116,8,6,.42); font-size: 13px; font-weight: 700; white-space: nowrap; }
 .hong-open i { width: 8px; height: 8px; border-radius: 50%; background: #78a84f; box-shadow: 0 0 0 3px rgba(120,168,79,.18); }
+.hong-open.closed { border-color: rgba(255,248,233,.55); background: rgba(45,33,28,.68); }
+.hong-open.closed i { background: #b9aea8; box-shadow: 0 0 0 3px rgba(185,174,168,.18); }
 .hong-hero > img:last-child { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 56% 54%; mix-blend-mode: normal; }
 .hong-categories { position: sticky; top: 0; z-index: 20; padding: 10px 12px; background: rgba(116,8,6,.96); border-bottom: 1px solid rgba(255,191,69,.45); backdrop-filter: blur(10px); }
 .hong-categories-inner { max-width: 760px; display: grid; grid-template-columns: repeat(3,1fr); gap: 5px; margin: 0 auto; padding: 4px; border: 1px solid var(--hong-gold); border-radius: 14px; }
