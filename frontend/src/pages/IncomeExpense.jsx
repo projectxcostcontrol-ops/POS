@@ -8,34 +8,59 @@ const YEARS = [now.getFullYear() - 1, now.getFullYear()];
 const MONTH_NAMES = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน',
   'กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
 
+/** The selected period as the API wants it: an instant, not a date. */
+function periodWindow(year, month) {
+  const start = month === ''
+    ? new Date(year, 0, 1)
+    : new Date(year, parseInt(month), 1);
+  const end = month === ''
+    ? new Date(year, 11, 31, 23, 59, 59, 999)
+    : new Date(year, parseInt(month) + 1, 0, 23, 59, 59, 999);
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
 export default function IncomeExpense() {
   const { storeId } = useStore();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(String(now.getMonth())); // '' = whole year
-  const [receipts, setReceipts] = useState([]);
-  const [materials, setMaterials] = useState([]);
-  const [recipes, setRecipes] = useState({});
+  const [overview, setOverview] = useState(null);
+  const [receivings, setReceivings] = useState([]);
   const [expenses, setExpenses] = useState({ fixed: [], variable: [], material: [] });
   // null = closed. {} = recording a new one. An expense = correcting that one.
   const [editing, setEditing] = useState(null);
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Takings and ingredient cost come from our own saved copy of sales,
+  // not from the POS.
+  //
+  // Reading the POS live, as this page used to, had three problems and
+  // all of them were invisible: the free plan only returns 31 days, so
+  // last month simply came back empty; orders recorded by hand - Grab,
+  // the phone, the online menu - are not in the POS at all, so their
+  // takings AND their ingredients were missing from the profit figure;
+  // and costing them meant fetching every recipe one at a time in the
+  // browser, which the backend already does in a single read.
+  useEffect(() => {
+    if (!storeId) return;
+    const { from, to } = periodWindow(year, month);
+    setLoading(true);
+    setError('');
+    Promise.all([
+      api.getSalesOverview(storeId, from, to, 'day', 0),
+      api.getReceivings(storeId),
+    ])
+      .then(([sales, deliveries]) => { setOverview(sales); setReceivings(deliveries); })
+      .catch((e) => { setOverview(null); setError(e.message); })
+      .finally(() => setLoading(false));
+  }, [storeId, year, month]);
 
   useEffect(() => {
     if (!storeId) return;
-    api.getReceipts(storeId).then(setReceipts);
-    api.getMaterials(storeId).then(setMaterials);
     ['fixed', 'variable', 'material'].forEach((c) =>
       api.getExpenses(storeId, c).then((list) => setExpenses((prev) => ({ ...prev, [c]: list }))));
   }, [storeId]);
-
-  useEffect(() => {
-    if (!storeId || receipts.length === 0) return;
-    const names = new Set();
-    receipts.forEach((r) => r.line_items.forEach((li) => names.add(li.item_name)));
-    Promise.all([...names].map((n) => api.getRecipe(storeId, n).then((r) => [n, r])))
-      .then((pairs) => setRecipes(Object.fromEntries(pairs)));
-  }, [storeId, receipts]);
 
   if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
 
@@ -45,27 +70,29 @@ export default function IncomeExpense() {
     return d.getFullYear() === year && (month === '' || d.getMonth() === parseInt(month));
   };
 
-  const periodReceipts = receipts.filter((r) => inPeriod(r.created_at));
-  const income = periodReceipts.reduce((s, r) => s + (r.total || 0), 0);
+  const income = overview?.total || 0;
 
-  const materialCostByRecipe = periodReceipts.reduce((sum, r) => {
-    r.line_items.forEach((li) => {
-      const recipe = recipes[li.item_name] || [];
-      recipe.forEach((ing) => {
-        const mat = materials.find((m) => m.id === ing.material_id);
-        if (mat) sum += (mat.cost || 0) * ing.qty * (li.quantity || 0);
-      });
-    });
-    return sum;
-  }, 0);
+  // The two halves of what ingredients cost, and they answer different
+  // questions. What the recipes say was consumed is what this month's
+  // sales actually used, so that is what a month's profit is measured
+  // against. What was bought is cash that left the till, which moves in
+  // lumps - a sack of rice bought today feeds three weeks - and is only
+  // comparable to the first over a long enough stretch.
+  const materialCostByRecipe = overview?.ingredient_cost || 0;
+  const purchased = receivings
+    .filter((r) => inPeriod(r.date))
+    .reduce((sum, r) => sum + (r.total || 0), 0);
 
   const fixedInPeriod = expenses.fixed.filter((e) => inPeriod(e.date));
   const variableInPeriod = expenses.variable.filter((e) => inPeriod(e.date));
-  const materialInPeriod = expenses.material.filter((e) => inPeriod(e.date));
+  // Typed in by hand before ingredient cost was computed. Still listed so
+  // they can be deleted, deliberately NOT counted: adding them to a
+  // figure derived from the recipes would charge the same food twice.
+  const legacyMaterial = expenses.material.filter((e) => inPeriod(e.date));
   const fixedSum = fixedInPeriod.reduce((s, e) => s + e.amount, 0);
   const variableSum = variableInPeriod.reduce((s, e) => s + e.amount, 0);
-  const materialSum = materialInPeriod.reduce((s, e) => s + e.amount, 0);
-  const totalExpense = fixedSum + variableSum + materialSum;
+  const totalExpense = fixedSum + variableSum + materialCostByRecipe;
+  const uncosted = overview?.uncosted_menus || [];
 
   async function reloadExpenses() {
     const lists = await Promise.all(
@@ -111,7 +138,7 @@ export default function IncomeExpense() {
   const allExpenses = [
     ...fixedInPeriod.map((e) => ({ ...e, category: 'fixed' })),
     ...variableInPeriod.map((e) => ({ ...e, category: 'variable' })),
-    ...materialInPeriod.map((e) => ({ ...e, category: 'material' })),
+    ...legacyMaterial.map((e) => ({ ...e, category: 'material' })),
   ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const isCurrentMonth = month !== '' && year === now.getFullYear() && parseInt(month) === now.getMonth();
 
@@ -138,8 +165,23 @@ export default function IncomeExpense() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 24 }}>
         <Stat label="ค่าใช้จ่ายคงที่" value={fixedSum} small />
         <Stat label="ค่าใช้จ่ายผันแปร" value={variableSum} small />
-        <Stat label="ค่าวัตถุดิบ" value={materialSum} small />
+        <Stat label="ค่าวัตถุดิบ" value={materialCostByRecipe} small />
       </div>
+
+      {loading && <p style={{ fontSize: 13, marginTop: -12 }}>กำลังโหลด...</p>}
+
+      {/* Named, not counted. A menu with no recipe brings in money and
+          costs nothing, so every figure above it looks better than it is -
+          and there is no way to see that from the numbers themselves. */}
+      {uncosted.length > 0 && (
+        <p style={{
+          fontSize: 12, color: 'var(--text-warning)', margin: '-12px 0 20px',
+        }}>
+          ยังไม่มีสูตร {uncosted.length} เมนู ({uncosted.slice(0, 3).join(', ')}
+          {uncosted.length > 3 ? ` และอีก ${uncosted.length - 3}` : ''}) —
+          เมนูพวกนี้นับเป็นรายรับแต่ไม่มีต้นทุน กำไรที่เห็นจึงสูงกว่าความจริง
+        </p>
+      )}
 
       {/* One list instead of three tabs. The categories were never
           separate things to work on - they're a label on each entry - and
@@ -152,6 +194,7 @@ export default function IncomeExpense() {
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           ค่าวัตถุดิบระบบคำนวณให้เองจากสูตร × ยอดขาย ไม่ต้องกรอก
+          {legacyMaterial.length > 0 && ' — รายการค่าวัตถุดิบที่กรอกไว้เองจะไม่ถูกนับซ้ำ ลบทิ้งได้'}
         </p>
 
         {allExpenses.length === 0 && (
@@ -166,6 +209,7 @@ export default function IncomeExpense() {
               <span style={{ fontSize: 13, display: 'block' }}>{e.name}</span>
               <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 {CATS[e.category]} · {e.date}
+                {e.category === 'material' && ' · ไม่ถูกนับในยอดรวม'}
               </span>
             </span>
             <span style={{ fontSize: 13, fontWeight: 500 }}>฿{e.amount.toLocaleString()}</span>
@@ -193,12 +237,22 @@ export default function IncomeExpense() {
       </div>
 
       <div className="stat-card" style={{ marginTop: 16 }}>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 8px' }}>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 4px' }}>
           เทียบยอดซื้อวัตถุดิบจริง กับต้นทุนตามสูตร
         </p>
-        <Row label="ซื้อจริง" value={materialSum} />
+        {/* Two different questions, and the difference between them is
+            not an error. Money out of the till moves in lumps - a sack of
+            rice bought today feeds three weeks - while the recipe figure
+            follows what actually sold. They only converge over a long
+            enough stretch. */}
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 10px' }}>
+          {purchased - materialCostByRecipe >= 0
+            ? 'ซื้อมากกว่าที่ใช้ = ตุนของไว้ในสต๊อก (ปกติถ้าเพิ่งซื้อของเข้าร้าน)'
+            : 'ซื้อน้อยกว่าที่ใช้ = ใช้ของที่ตุนไว้เดิม (ปกติถ้าเดือนนี้ยังไม่ได้ซื้อเข้า)'}
+        </p>
+        <Row label="ซื้อจริง" value={purchased} />
         <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />
-        <Row label="ส่วนต่าง" value={materialSum - materialCostByRecipe} bold warn />
+        <Row label="ส่วนต่าง" value={purchased - materialCostByRecipe} bold warn />
       </div>
 
       {editing && (

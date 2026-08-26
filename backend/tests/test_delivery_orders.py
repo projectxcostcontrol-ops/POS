@@ -134,6 +134,13 @@ def test_it_shows_up_in_the_sales_reports_untouched():
     check("both orders counted", summary["bill_count"], 2)
     check("takings add up", summary["total"], 315)
 
+    # And their ingredients are costed, which is what makes the profit
+    # figure on รายรับรายจ่าย true. Four dishes: 4 x (0.2kg duck @ 200 +
+    # 0.3kg rice @ 25) = 4 x 47.5.
+    check("ingredients are costed too", summary["ingredient_cost"], 190)
+    check("so profit is takings minus that", summary["gross_profit"], 125)
+    check("nothing went uncosted", summary["uncosted_menus"], [])
+
 
 def test_a_sale_the_pos_never_had_is_not_reported_as_missing():
     section("The POS reconcile check ignores orders the POS never had")
