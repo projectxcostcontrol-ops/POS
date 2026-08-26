@@ -215,6 +215,13 @@ export const api = {
 
   getExpenses: (storeId, category) =>
     request(`/api/${storeId}/expenses${category ? `?category=${category}` : ''}`),
+  updateExpense: (storeId, expenseId, { category, name, amount, date }) =>
+    request(`/api/${storeId}/expenses/${expenseId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ category, name, amount, date }),
+    }),
+  deleteExpense: (storeId, expenseId) =>
+    request(`/api/${storeId}/expenses/${expenseId}`, { method: 'DELETE' }),
   addExpense: (storeId, { category, name, amount, date }) =>
     request(
       `/api/${storeId}/expenses?category=${category}&name=${encodeURIComponent(name)}&amount=${amount}&date=${date}`,

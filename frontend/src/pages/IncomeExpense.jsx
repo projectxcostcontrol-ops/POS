@@ -16,7 +16,10 @@ export default function IncomeExpense() {
   const [materials, setMaterials] = useState([]);
   const [recipes, setRecipes] = useState({});
   const [expenses, setExpenses] = useState({ fixed: [], variable: [], material: [] });
-  const [showAdd, setShowAdd] = useState(false);
+  // null = closed. {} = recording a new one. An expense = correcting that one.
+  const [editing, setEditing] = useState(null);
+  const [busyId, setBusyId] = useState('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
     if (!storeId) return;
@@ -64,11 +67,45 @@ export default function IncomeExpense() {
   const materialSum = materialInPeriod.reduce((s, e) => s + e.amount, 0);
   const totalExpense = fixedSum + variableSum + materialSum;
 
+  async function reloadExpenses() {
+    const lists = await Promise.all(
+      ['fixed', 'variable', 'material'].map((c) => api.getExpenses(storeId, c)));
+    setExpenses({ fixed: lists[0], variable: lists[1], material: lists[2] });
+  }
+
   async function saveExpense(form) {
-    await api.addExpense(storeId, form);
-    const updated = await api.getExpenses(storeId, form.category);
-    setExpenses((prev) => ({ ...prev, [form.category]: updated }));
-    setShowAdd(false);
+    setError('');
+    try {
+      if (editing?.id) await api.updateExpense(storeId, editing.id, form);
+      else await api.addExpense(storeId, form);
+      // Every category, not just this one: a correction can move an entry
+      // from one category to another, and refreshing only the new one
+      // would leave a stale copy sitting in the old.
+      await reloadExpenses();
+      setEditing(null);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
+  async function removeExpense(expense) {
+    // Named and priced in the question. "ลบรายการนี้?" is not enough to
+    // decide on when three rows look alike, and this one does not come back.
+    const ok = window.confirm(
+      `ลบรายจ่าย "${expense.name}" ฿${Number(expense.amount).toLocaleString()} ` +
+      `(${expense.date})?\n\nลบแล้วหายถาวร กู้คืนไม่ได้`);
+    if (!ok) return;
+
+    setBusyId(expense.id);
+    setError('');
+    try {
+      await api.deleteExpense(storeId, expense.id);
+      await reloadExpenses();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusyId('');
+    }
   }
 
   const allExpenses = [
@@ -111,7 +148,7 @@ export default function IncomeExpense() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
           <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>รายจ่ายทั้งหมด</p>
-          {isCurrentMonth && <button onClick={() => setShowAdd(true)}>+ บันทึกรายจ่าย</button>}
+          {isCurrentMonth && <button onClick={() => setEditing({})}>+ บันทึกรายจ่าย</button>}
         </div>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
           ค่าวัตถุดิบระบบคำนวณให้เองจากสูตร × ยอดขาย ไม่ต้องกรอก
@@ -132,8 +169,27 @@ export default function IncomeExpense() {
               </span>
             </span>
             <span style={{ fontSize: 13, fontWeight: 500 }}>฿{e.amount.toLocaleString()}</span>
+            {/* Correcting is allowed in any month, unlike recording. A
+                wrong number from last month stays wrong until someone
+                fixes it - and it is still in the profit figure while it
+                does. Entries with no id are pre-existing data from before
+                these were addressable; they can still be read. */}
+            {e.id && (
+              <span style={{ display: 'flex', gap: 4, flex: 'none' }}>
+                <button onClick={() => setEditing(e)} disabled={busyId === e.id}
+                  style={{ fontSize: 11, padding: '4px 8px' }}>แก้ไข</button>
+                <button onClick={() => removeExpense(e)} disabled={busyId === e.id}
+                  style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text-danger)' }}>
+                  {busyId === e.id ? '...' : 'ลบ'}
+                </button>
+              </span>
+            )}
           </div>
         ))}
+
+        {error && (
+          <p style={{ fontSize: 12, color: 'var(--text-danger)', margin: '10px 0 0' }}>{error}</p>
+        )}
       </div>
 
       <div className="stat-card" style={{ marginTop: 16 }}>
@@ -145,8 +201,9 @@ export default function IncomeExpense() {
         <Row label="ส่วนต่าง" value={materialSum - materialCostByRecipe} bold warn />
       </div>
 
-      {showAdd && (
-        <AddExpenseModal onCancel={() => setShowAdd(false)} onSave={saveExpense} />
+      {editing && (
+        <ExpenseModal expense={editing} onCancel={() => setEditing(null)}
+          onSave={saveExpense} />
       )}
     </div>
   );
@@ -169,29 +226,61 @@ function Row({ label, value, bold, warn }) {
     </div>
   );
 }
-function AddExpenseModal({ onCancel, onSave }) {
-  const [category, setCategory] = useState('fixed');
-  const [name, setName] = useState('');
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+/**
+ * Records a new expense, or corrects one that was typed wrong.
+ *
+ * The same form for both on purpose: correcting is not a different job
+ * from recording, it is the same job done again with the right numbers,
+ * and a separate screen for it would be one more thing to keep in step.
+ */
+function ExpenseModal({ expense, onCancel, onSave }) {
+  const isEdit = !!expense.id;
+  const [category, setCategory] = useState(expense.category || 'fixed');
+  const [name, setName] = useState(expense.name || '');
+  const [amount, setAmount] = useState(expense.amount ?? '');
+  const [date, setDate] = useState(expense.date || new Date().toISOString().slice(0, 10));
+  const [saving, setSaving] = useState(false);
+
+  const valid = name.trim() && parseFloat(amount) > 0 && date;
+
+  async function submit() {
+    if (!valid || saving) return;
+    setSaving(true);
+    try {
+      await onSave({ category, name: name.trim(), amount: parseFloat(amount) || 0, date });
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>บันทึกรายจ่าย</p>
+        <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 16px' }}>
+          {isEdit ? 'แก้ไขรายจ่าย' : 'บันทึกรายจ่าย'}
+        </p>
 
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>หมวด</label>
-        {/* ค่าวัตถุดิบ is deliberately absent: it's computed from
-            deliveries already recorded, so letting someone type it here
-            would double-count the same spend against itself. */}
+        {/* ค่าวัตถุดิบ is deliberately absent when recording: it's
+            computed from deliveries already recorded, so letting someone
+            type it here would double-count the same spend against itself.
+            It IS offered when correcting an entry that is already in that
+            category, because dropping the option would silently move the
+            entry somewhere else the moment anyone edited its name. */}
         <select value={category} onChange={(e) => setCategory(e.target.value)}
           style={{ width: '100%', margin: '4px 0 4px' }}>
           <option value="fixed">{CATS.fixed}</option>
           <option value="variable">{CATS.variable}</option>
+          {expense.category === 'material' && (
+            <option value="material">{CATS.material}</option>
+          )}
         </select>
         <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 12px' }}>
-          {category === 'fixed'
-            ? 'จ่ายเท่าเดิมทุกเดือน เช่น ค่าเช่า ค่าเน็ต เงินเดือนประจำ'
-            : 'จ่ายไม่เท่ากันแต่ละเดือน เช่น ค่าไฟ ค่าแก๊ส ค่าล่วงเวลา'}
+          {category === 'material'
+            ? 'ปกติระบบคำนวณให้เองจากสูตร × ยอดขาย - รายการนี้บันทึกไว้ก่อนหน้านั้น'
+            : category === 'fixed'
+              ? 'จ่ายเท่าเดิมทุกเดือน เช่น ค่าเช่า ค่าเน็ต เงินเดือนประจำ'
+              : 'จ่ายไม่เท่ากันแต่ละเดือน เช่น ค่าไฟ ค่าแก๊ส ค่าล่วงเวลา'}
         </p>
 
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>รายการ</label>
@@ -201,9 +290,11 @@ function AddExpenseModal({ onCancel, onSave }) {
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>วันที่จ่าย</label>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ width: '100%', margin: '4px 0 16px' }} />
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onCancel}>ยกเลิก</button>
+          <button onClick={onCancel} disabled={saving}>ยกเลิก</button>
           <button style={{ background: 'var(--surface-1)' }}
-            onClick={() => onSave({ category, name, amount: parseFloat(amount) || 0, date })}>บันทึก</button>
+            onClick={submit} disabled={!valid || saving}>
+            {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+          </button>
         </div>
       </div>
     </div>

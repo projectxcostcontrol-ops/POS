@@ -30,6 +30,7 @@ from core.pos_registry import PosRegistry
 from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
+from core.expenses import clean_expense, ExpenseError
 from core.unit_conversion import apply_unit_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
@@ -1275,10 +1276,55 @@ def list_expenses(store_id: str, category: str | None = None,
     return c.store.list_expenses(store_id, category)
 
 
+def _clean_expense(category, name, amount, date) -> dict:
+    """The rules live in core/expenses.py; this only turns a refusal into
+    the 400 the browser expects. Its message is already written for the
+    person who typed it, so it is passed straight through."""
+    try:
+        return clean_expense(category, name, amount, date)
+    except ExpenseError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/{store_id}/expenses")
 def add_expense(store_id: str, category: str, name: str, amount: float, date: str,
                 c: Ctx = Depends(store_money)):
-    c.store.add_expense(store_id, category, name, amount, date)
+    e = _clean_expense(category, name, amount, date)
+    return {"ok": True, **c.store.add_expense(store_id, **e)}
+
+
+@app.put("/api/{store_id}/expenses/{expense_id}")
+def update_expense(store_id: str, expense_id: str, data: dict,
+                   c: Ctx = Depends(store_money)):
+    """data: {category, name, amount, date}
+
+    Corrects an entry that was typed wrong. Any month, not just this one:
+    recording is restricted to the current month so nobody back-dates
+    spending by accident, but a wrong number from last month is wrong
+    until someone fixes it, and refusing to let them fix it just leaves
+    the profit figure wrong for good.
+    """
+    if not c.store.get_expense(store_id, expense_id):
+        raise HTTPException(404, "ไม่พบรายจ่ายนี้")
+    e = _clean_expense(data.get("category"), data.get("name"),
+                       data.get("amount"), data.get("date"))
+    c.store.update_expense(store_id, expense_id, e)
+    return {"ok": True, **e}
+
+
+@app.delete("/api/{store_id}/expenses/{expense_id}")
+def delete_expense(store_id: str, expense_id: str, c: Ctx = Depends(store_money)):
+    """Removes it outright - no hidden record, nothing left in the list.
+
+    Deliberate, and different from how stock corrections work: a stock
+    count writes a movement rather than editing a number, because the
+    discrepancy itself is information about the kitchen. An expense typed
+    by mistake is not information about anything - it is a typo, and
+    keeping a tombstone for it would just make the list harder to read.
+    """
+    if not c.store.get_expense(store_id, expense_id):
+        raise HTTPException(404, "ไม่พบรายจ่ายนี้")
+    c.store.delete_expense(store_id, expense_id)
     return {"ok": True}
 
 

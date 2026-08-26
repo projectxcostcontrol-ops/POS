@@ -675,10 +675,35 @@ class Store:
             {"ingredients": ingredients, "item_name": item_name})
 
     # ---- expenses ----
-    def add_expense(self, store_id: str, category: str, name: str, amount: float, date: str):
-        self._col(store_id, "expenses").add({
+    # Typed in by a person, which means typed in wrong sometimes - a digit
+    # dropped, the wrong month, the same bill entered twice. Every one of
+    # those lands straight in the profit figure, so being able to correct
+    # them is not a nicety.
+
+    EXPENSE_FIELDS = ("category", "name", "amount", "date")
+
+    def add_expense(self, store_id: str, category: str, name: str, amount: float,
+                    date: str) -> dict:
+        _, ref = self._col(store_id, "expenses").add({
             "category": category, "name": name, "amount": amount, "date": date,
         })
+        return {"id": ref.id}
+
+    def get_expense(self, store_id: str, expense_id: str) -> dict | None:
+        doc = self._col(store_id, "expenses").document(expense_id).get()
+        return (doc.to_dict() | {"id": doc.id}) if doc.exists else None
+
+    def update_expense(self, store_id: str, expense_id: str, data: dict):
+        """Only the four fields that make up an expense can be written.
+
+        Filtered rather than trusted: this takes a request body, and a
+        write that passes the whole body through is how a field nobody
+        meant to expose ends up editable."""
+        clean = {k: v for k, v in data.items() if k in self.EXPENSE_FIELDS}
+        self._col(store_id, "expenses").document(expense_id).set(clean, merge=True)
+
+    def delete_expense(self, store_id: str, expense_id: str):
+        self._col(store_id, "expenses").document(expense_id).delete()
 
     def list_expenses(self, store_id: str, category: str | None = None) -> list[dict]:
         col = self._col(store_id, "expenses")
