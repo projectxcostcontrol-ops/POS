@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { BowlFood, ChatCircleDots, ForkKnife, MapPin, Minus, Phone, Plus, Receipt, Trash, X } from '@phosphor-icons/react';
-import './HongDuckMenu.css';
 
 const PHONE_DISPLAY = '082-6516461';
 const PHONE_LINK = '0826516461';

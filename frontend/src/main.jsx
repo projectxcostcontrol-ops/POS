@@ -5,6 +5,9 @@ import '@fontsource/noto-sans-thai/500.css'
 import '@fontsource/noto-sans-thai/600.css'
 import '@fontsource/noto-sans-thai/700.css'
 import './styles.css'
+// Keep the public-menu stylesheet in the entry bundle. Some production hosts
+// do not inject CSS emitted beside a conditionally imported page chunk.
+import './pages/HongDuckMenu.css'
 
 // QR menu pages are public and must not initialize Firebase Auth. Loading
 // the authenticated app lazily also keeps its larger bundle out of the
