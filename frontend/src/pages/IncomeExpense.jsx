@@ -25,6 +25,7 @@ export default function IncomeExpense() {
   const [month, setMonth] = useState(String(now.getMonth())); // '' = whole year
   const [overview, setOverview] = useState(null);
   const [receivings, setReceivings] = useState([]);
+  const [materials, setMaterials] = useState([]);
   const [expenses, setExpenses] = useState({ fixed: [], variable: [], material: [] });
   // null = closed. {} = recording a new one. An expense = correcting that one.
   const [editing, setEditing] = useState(null);
@@ -50,8 +51,11 @@ export default function IncomeExpense() {
     Promise.all([
       api.getSalesOverview(storeId, from, to, 'day', 0),
       api.getReceivings(storeId),
+      api.getMaterials(storeId),
     ])
-      .then(([sales, deliveries]) => { setOverview(sales); setReceivings(deliveries); })
+      .then(([sales, deliveries, mats]) => {
+        setOverview(sales); setReceivings(deliveries); setMaterials(mats);
+      })
       .catch((e) => { setOverview(null); setError(e.message); })
       .finally(() => setLoading(false));
   }, [storeId, year, month]);
@@ -89,6 +93,18 @@ export default function IncomeExpense() {
   const purchased = receivings
     .filter((r) => inPeriod(r.date))
     .reduce((sum, r) => sum + (r.total || 0), 0);
+
+  // Money sitting on the shelf. Not a third term in the comparison above -
+  // that sum already closes, because the ledger derives stock from
+  // exactly those two figures - but the balance the difference flows
+  // into, and the answer to "profit dropped, where did the money go".
+  //
+  // Negative stock is clamped to zero. It means the ledger is wrong
+  // somewhere - a recipe overstating a portion, a delivery never
+  // recorded - not that the shop is owed money, and letting it subtract
+  // would quietly cancel out real stock elsewhere.
+  const stockValue = materials.reduce(
+    (sum, m) => sum + Math.max(0, m.stock || 0) * (m.cost || 0), 0);
 
   const fixedInPeriod = expenses.fixed.filter((e) => inPeriod(e.date));
   const variableInPeriod = expenses.variable.filter((e) => inPeriod(e.date));
@@ -261,6 +277,21 @@ export default function IncomeExpense() {
         <Row label="ซื้อจริง" value={purchased} />
         <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />
         <Row label="ส่วนต่าง" value={purchased - materialCostByRecipe} bold warn />
+
+        {/* Below the line on purpose: the three rows above are this
+            period, this one is a balance as it stands right now. The
+            ledger keeps the current figure, not one per day, so a past
+            month shows that month's buying and using against today's
+            shelf - which would mislead badly if it were not labelled. */}
+        <div style={{
+          borderTop: '1px solid var(--border)', marginTop: 10, paddingTop: 8,
+        }}>
+          <Row label="มูลค่าสต๊อกคงเหลือ (ณ วันนี้)" value={stockValue} bold />
+          <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '4px 0 0' }}>
+            เงินที่จมอยู่ในของบนชั้นตอนนี้ — เดือนที่ซื้อมากกว่าใช้ กำไรจะดูน้อยลง
+            เพราะเงินย้ายมากองตรงนี้ ไม่ได้หายไปไหน
+          </p>
+        </div>
       </div>
 
       {editing && (
