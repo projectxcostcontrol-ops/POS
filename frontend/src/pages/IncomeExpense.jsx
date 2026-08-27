@@ -304,7 +304,15 @@ export default function IncomeExpense() {
             : 'เดือนนี้ซื้อน้อยกว่าที่ใช้ = กินของที่ตุนไว้เดิม กำไรจึงดูมากกว่าปกติ'}
         </p>
         <Row label="ซื้อจริง" value={purchased} />
-        <Row label="ตามสูตรควรใช้" value={materialCostByRecipe} />
+        {/* The label says which price, because this figure is worked out
+            at the material's latest average cost, not the price that was
+            paid in the month being shown. When ingredient prices move,
+            last month's recipe cost moves with them - small and slow,
+            since the average is over the shop's whole history, but real.
+            Recording the cost at the moment of sale instead would fix it
+            and break something worth more right now: a menu whose recipe
+            is added later still gets costed backwards. See NOTES 7.11. */}
+        <Row label="ตามสูตร (ราคาวัตถุดิบล่าสุด)" value={materialCostByRecipe} />
         <Row label="ส่วนต่าง" value={purchased - materialCostByRecipe} bold warn />
 
         {/* Below the line on purpose: the three rows above are this
