@@ -409,6 +409,90 @@ def test_a_business_cannot_ask_forever():
            other.assistant_asks_today("2026-08-27")], [3, 1])
 
 
+# A shop with a long menu, which is where what-travels starts to matter.
+LONG_SALES = [
+    sale("2026-08-03T05:00:00.000Z", 76500,
+         [item(f"เมนู{i:02d}", 40 - i, 100) for i in range(30)]),
+]
+LONG_RECIPES = {f"เมนู{i:02d}": [{"material_id": "rice", "qty": 0.1}]
+                for i in range(30)}
+
+
+def long_menu_snapshot():
+    return assistant.build_snapshot(
+        branch="b1", rollups=list(roll.build_many(LONG_SALES, BKK).values()),
+        recipes=LONG_RECIPES, materials=MATERIALS, expenses=[], receivings=[],
+        period_from="2026-08-01", period_to="2026-08-31", today="2026-09-15")
+
+
+def test_the_whole_menu_is_known_but_only_part_of_it_travels():
+    section("The whole menu is known, but only part of it travels")
+
+    full = long_menu_snapshot()
+    check("the shop's full menu is worked out", len(full["menus"]["performance"]), 30)
+
+    ctx = assistant.build_context(current=full, previous=None, series=[],
+                                  question="เดือนนี้เป็นไง")
+    shown = ctx["period"]["menus"]
+    check("but the model is shown the cap",
+          len(shown["performance"]), assistant.MODEL_MENU_LIMIT)
+    check("and told how many it is not seeing",
+          shown["performance_omitted"], 30 - assistant.MODEL_MENU_LIMIT)
+    check("in words, so it cannot report the cap as the whole menu",
+          "ห้ามสรุปว่านี่คือเมนูทั้งหมด" in shown["performance_note"], True)
+    check("the snapshot itself is not damaged - it is copied, not edited",
+          len(full["menus"]["performance"]), 30)
+
+    # เมนู29 is the worst seller. Capping must not make it unaskable, which
+    # was the whole reason the full list was being sent.
+    asked = assistant.build_context(current=full, previous=None, series=[],
+                                    question="ควรเลิกขายเมนู29ไหม")
+    names = [row["name"] for row in asked["period"]["menus"]["performance"]]
+    check("a menu the question names travels even from the bottom of the list",
+          "เมนู29" in names, True)
+    check("without displacing the best sellers",
+          names[0], full["menus"]["performance"][0]["name"])
+    check("and it is found in the full list, not the shown one",
+          assistant.menus_named_in("ควรเลิกขายเมนู29ไหม",
+                                   [r["name"] for r in full["menus"]["performance"]]),
+          ["เมนู29"])
+    check("a longer name wins over the shorter one inside it",
+          assistant.menus_named_in("ข้าวผัดหมูราคาเท่าไหร่",
+                                   ["ข้าวผัด", "ข้าวผัดหมู"]),
+          ["ข้าวผัดหมู", "ข้าวผัด"])
+
+    check("no figure the model is told changed",
+          ctx["period"]["sales"], full["sales"])
+    check("nor the profit", ctx["period"]["profit"], full["profit"])
+
+
+def test_capping_narrows_what_counts_as_a_verified_number():
+    section("Capping narrows what counts as a verified number")
+
+    full = long_menu_snapshot()
+    hidden = full["menus"]["performance"][-1]
+    ctx = assistant.build_context(current=full, previous=None, series=[],
+                                  question="เดือนนี้เป็นไง")
+
+    check("a menu below the cap is not shown",
+          hidden["name"] in [r["name"] for r in ctx["period"]["menus"]["performance"]],
+          False)
+    # Its revenue was an authorised number purely because the whole list
+    # travelled. That is the leak: every extra row is another few numbers
+    # an invented figure can land within a percent of.
+    check("so its revenue is no longer authorised by simply existing",
+          assistant.verify_numbers(f"ยอดขาย {hidden['revenue']:.0f} บาท", ctx),
+          [hidden["revenue"]])
+    check("while the figures that did travel still pass",
+          assistant.verify_numbers(f"ยอดขาย {full['sales']['total']:.0f} บาท", ctx),
+          [])
+
+    asked = assistant.build_context(current=full, previous=None, series=[],
+                                    question=f"ควรเลิกขาย{hidden['name']}ไหม")
+    check("and asking about it authorises it again",
+          assistant.verify_numbers(f"ยอดขาย {hidden['revenue']:.0f} บาท", asked), [])
+
+
 def main():
     print("Assistant - phase 1")
     print("=" * 50)
@@ -421,6 +505,8 @@ def main():
     test_the_difference_between_two_periods_is_already_taken()
     test_an_answer_comes_back_with_what_could_not_be_checked()
     test_a_business_cannot_ask_forever()
+    test_the_whole_menu_is_known_but_only_part_of_it_travels()
+    test_capping_narrows_what_counts_as_a_verified_number()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

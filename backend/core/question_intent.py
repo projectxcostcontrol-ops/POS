@@ -7,9 +7,8 @@ pure module does both deterministically from the same snapshots used by the
 reports.  Gemini receives the result only to explain it naturally in Thai.
 """
 
-import re
-
 from core import advisor
+from core import assistant
 
 
 INTENT_LABELS = {
@@ -231,12 +230,12 @@ def _action(route_key: str, path: str | None, label: str) -> dict:
 
 
 def _mentioned_menu(question: str, menus: list[dict]) -> dict | None:
-    compact = re.sub(r"\s+", "", question or "").lower()
-    for menu in sorted(menus, key=lambda row: len(row.get("name") or ""), reverse=True):
-        name = re.sub(r"\s+", "", menu.get("name") or "").lower()
-        if name and name in compact:
-            return menu
-    return None
+    """Matched against the shop's FULL menu list, which is why the list the
+    model is shown can be capped without making any dish unaskable."""
+    named = assistant.menus_named_in(question, [m.get("name") for m in menus])
+    if not named:
+        return None
+    return next((m for m in menus if m.get("name") == named[0]), None)
 
 
 def _has(text: str, *terms: str) -> bool:

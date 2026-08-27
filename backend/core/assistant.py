@@ -341,20 +341,92 @@ def _numbers_in_text(text: str) -> list[float]:
 # takings. Short enough to be honest about, long enough for a real one.
 MAX_QUESTION_LENGTH = 400
 
+# How many menus the model is shown. The shop's full menu list is kept
+# server-side and used by every Python step that needs it - what this
+# caps is only what travels.
+#
+# Two things go wrong when the whole list travels. It is the bulk of the
+# payload, and payload is both cost and the amount of the shop's trade
+# that leaves the building. And every figure in it - each menu's
+# quantity, revenue, unit cost, profit and margin - joins the pool that
+# verify_numbers accepts, so a made-up number has hundreds more chances
+# to land within a percent of something real. Measured on a shop with
+# eighty menus, sending them all took a four-digit invented figure from
+# passing 35% of the time to 69%.
+#
+# Nothing is lost by capping it, because a question that names a menu is
+# answered by finding that menu here (see menus_named_in) and sending
+# that one along with the rest.
+MODEL_MENU_LIMIT = 12
+
 
 def build_context(*, current: dict, previous: dict | None,
-                  series: list[dict]) -> dict:
+                  series: list[dict], question: str = "") -> dict:
     """What the model is shown for one question.
 
     Two snapshots and the difference between them, already taken. The
     subtraction is done here for the same reason every other figure is:
     a model asked what changed will always produce a number.
+
+    The comparison is worked out from the FULL snapshots before either is
+    narrowed, so capping the menu list cannot change a single figure the
+    model is told - only how many it is told.
     """
-    context = {"period": current, "series": series}
+    change = compare_snapshots(current, previous) if previous is not None else None
+    context = {"period": _for_model(current, question), "series": series}
     if previous is not None:
-        context["previous_period"] = previous
-        context["change"] = compare_snapshots(current, previous)
+        context["previous_period"] = _for_model(previous, question)
+        context["change"] = change
     return context
+
+
+def menus_named_in(question: str, names) -> list[str]:
+    """The menu names a question actually mentions.
+
+    Matched with the spaces taken out, because a dish typed into a search
+    box is rarely spaced the way it was typed into the POS.
+    """
+    compact = re.sub(r"\s+", "", question or "").lower()
+    if not compact:
+        return []
+    # Longest first, so "ข้าวผัดหมู" is not reported as "ข้าวผัด".
+    hits = []
+    for name in sorted((n for n in names if n), key=len, reverse=True):
+        flat = re.sub(r"\s+", "", name).lower()
+        if flat and flat in compact:
+            hits.append(name)
+    return hits
+
+
+def _for_model(snapshot: dict, question: str) -> dict:
+    """The same snapshot with its menu list narrowed to what travels.
+
+    The best sellers, plus any menu the question named. What was left out
+    is stated rather than silently dropped: a model shown twelve rows and
+    told nothing else will say the shop sells twelve dishes.
+    """
+    menus = snapshot.get("menus") or {}
+    rows = menus.get("performance") or []
+    if MODEL_MENU_LIMIT <= 0 or len(rows) <= MODEL_MENU_LIMIT:
+        return snapshot
+
+    kept = list(rows[:MODEL_MENU_LIMIT])
+    shown = {row.get("name") for row in kept}
+    named = set(menus_named_in(question, [row.get("name") for row in rows]))
+    kept.extend(row for row in rows
+                if row.get("name") in named and row.get("name") not in shown)
+
+    omitted = len(rows) - len(kept)
+    return {**snapshot, "menus": {
+        **menus,
+        "performance": kept,
+        "performance_note": (
+            f"แสดงเฉพาะเมนูที่ยอดขายสูงสุดและเมนูที่ถูกเอ่ยชื่อในคำถาม "
+            f"ยังมีอีก {omitted} เมนูที่ไม่ได้แสดง "
+            f"ห้ามสรุปว่านี่คือเมนูทั้งหมดของร้าน "
+            f"ถ้าคำถามเกี่ยวกับเมนูที่ไม่อยู่ในรายการ ให้บอกว่าต้องระบุชื่อเมนู"),
+        "performance_omitted": omitted,
+    }}
 
 
 def compare_snapshots(current: dict, previous: dict) -> dict:

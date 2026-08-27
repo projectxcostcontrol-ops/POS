@@ -1395,17 +1395,21 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
                                    recipes, materials)
 
     previous_trimmed = _trim_previous(previous)
+    question = data.get("question", "")
+    # Analysed against the FULL snapshots - every menu, both periods - so
+    # narrowing what the model is shown cannot narrow what was worked out.
+    decision_support = question_intent.analyze(question, current, previous_trimmed)
+    recommendations = advisor_lib.build_recommendations(
+        current, previous_trimmed, limit=3)
     context = assistant_lib.build_context(
         current=current, previous=previous_trimmed,
-        series=daily_rollup.breakdown(rollups))
-    decision_support = question_intent.analyze(
-        data.get("question", ""), current, previous_trimmed)
+        series=daily_rollup.breakdown(rollups), question=question)
     context["question_analysis"] = decision_support
 
     history = data.get("previous_questions") or []
     if not isinstance(history, list):
         raise HTTPException(400, "ประวัติคำถามไม่ถูกต้อง")
-    result = assistant_lib.answer(provider, context, data.get("question", ""),
+    result = assistant_lib.answer(provider, context, question,
                                   previous_questions=history)
     if result["ok"]:
         # Counted only when a question actually reached the provider. A
@@ -1416,7 +1420,12 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
             "asks_today": asked + (1 if result["ok"] else 0),
             "daily_limit": ASSISTANT_DAILY_LIMIT,
             "caveats": current.get("caveats", []),
-            "decision_support": decision_support}
+            "decision_support": decision_support,
+            # Returned so the page does not have to ask /insights again for
+            # figures this request already worked out. The two endpoints
+            # still read the same period separately when the page is first
+            # opened; collapsing that needs the cache in NOTES 7.10.
+            "recommendations": recommendations}
 
 
 @app.get("/api/{store_id}/assistant/insights")
@@ -1577,8 +1586,9 @@ def _period_snapshot(c: Ctx, store_id: str, first: str, last: str, tz: int,
         rollups=rollups,
         recipes=recipes,
         materials=materials,
-        expenses=[e for e in c.store.list_expenses(store_id)
-                  if first <= (e.get("date") or "")[:10] <= last],
+        # Ranged rather than fetched-and-filtered. This used to read every
+        # expense the shop had ever recorded, twice per question.
+        expenses=c.store.list_expenses(store_id, start=first, end=last),
         receivings=c.store.list_receivings(store_id, first, last),
         period_from=first, period_to=last, today=today)
     return snapshot, rollups

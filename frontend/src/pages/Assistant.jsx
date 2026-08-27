@@ -152,6 +152,11 @@ export default function Assistant() {
       if (r.ok) {
         setResult({ ...r, question: q });
         setPreviousQuestions((items) => [...items, q].slice(-4));
+        // The answer already carries the recommendations for this period -
+        // the request worked them out to answer the question. Taking them
+        // from here keeps the panel and the answer talking about the same
+        // figures, and saves asking /insights for them a second time.
+        if (r.recommendations) setInsights(r.recommendations);
       }
       else setError(r.error || 'ผู้ช่วยตอบไม่ได้ตอนนี้');
     } catch (e) {

@@ -174,6 +174,37 @@ def test_a_material_entry_can_still_be_corrected():
     check("still in its own category", saved["category"], "material")
 
 
+def test_asking_for_one_month_costs_one_month():
+    section("Asking for one month costs one month")
+
+    store = make_test_store(db=FakeDb())
+    for month in range(1, 13):
+        for n in range(10):
+            store.add_expense("b1", category="fixed", name=f"ค่าเช่า{n}",
+                              amount=100, date=f"2026-{month:02d}-{(n % 28) + 1:02d}")
+    # Saved as a full timestamp - nothing normalises this field on the way
+    # in, and the equivalent bug once dropped a month of purchases.
+    store.add_expense("b1", category="variable", name="ค่าไฟ", amount=3400,
+                      date="2026-07-31T18:00:00.000Z")
+    store.add_expense("b1", category="variable", name="ไม่มีวันที่", amount=999,
+                      date="")
+
+    store.db.reset_meter()
+    rows = store.list_expenses("b1", start="2026-07-01", end="2026-07-31")
+    check("a month is read as a month, not as the shop's whole history",
+          store.db.reads <= 15, True)
+    check("and the whole collection is still 122 documents",
+          len(store.list_expenses("b1")), 122)
+    check("the month's rows come back",
+          sorted(r["amount"] for r in rows), [100] * 10 + [3400])
+    check("including one saved as a timestamp rather than a date",
+          any(r["name"] == "ค่าไฟ" for r in rows), True)
+    check("an entry with no date belongs to no month, as before",
+          any(r["name"] == "ไม่มีวันที่" for r in rows), False)
+    check("a month the shop recorded nothing in is empty, not an error",
+          store.list_expenses("b1", start="2025-01-01", end="2025-01-31"), [])
+
+
 def main():
     print("Running expense tests (offline)")
 
@@ -185,6 +216,7 @@ def main():
     test_the_shapes_that_are_refused()
     test_what_is_accepted_comes_back_tidy()
     test_a_material_entry_can_still_be_corrected()
+    test_asking_for_one_month_costs_one_month()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

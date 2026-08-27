@@ -75,8 +75,16 @@ def main() -> int:
 
 
 def _checks_in(output: str) -> int:
+    """How many assertions a file reported.
+
+    Two wordings, because the newer files count whole tests rather than
+    individual checks. A file whose tally this cannot read still fails
+    the run when it fails - the exit code decides that - but it would
+    silently subtract itself from the headline number, which is how a
+    suite quietly shrinks while looking the same size.
+    """
     for line in reversed(output.splitlines()):
-        if line.endswith("checks passed"):
+        if line.endswith("checks passed") or line.endswith("tests passed"):
             try:
                 return int(line.split("/")[0])
             except ValueError:

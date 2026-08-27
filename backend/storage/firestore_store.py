@@ -789,9 +789,36 @@ class Store:
     def delete_expense(self, store_id: str, expense_id: str):
         self._col(store_id, "expenses").document(expense_id).delete()
 
-    def list_expenses(self, store_id: str, category: str | None = None) -> list[dict]:
-        col = self._col(store_id, "expenses")
-        query = col.where("category", "==", category) if category else col
+    def list_expenses(self, store_id: str, category: str | None = None,
+                      start: str | None = None,
+                      end: str | None = None) -> list[dict]:
+        """Expenses, optionally by category and within a date range.
+
+        The range is pushed down to Firestore for the same reason
+        list_receivings and list_sales push theirs: a question about one
+        month should not cost every expense the shop has ever recorded.
+        Reading them all and filtering here meant the assistant grew more
+        expensive every month the shop stayed open while answering the
+        same-sized question.
+
+        Bounds are YYYY-MM-DD. The upper one is widened by one character
+        so a row whose date was saved as a full timestamp - nothing
+        normalises this field on the way in - still falls inside the last
+        day of the range instead of dropping out of every month it
+        belongs to. That exact bug cost the receiving figures a month of
+        purchases before (see NOTES 7.9).
+
+        A row with no date at all is left out, which is what the caller's
+        own filtering already did: an expense with no date cannot be put
+        in a period, and guessing one would be worse than omitting it.
+        """
+        query = self._col(store_id, "expenses")
+        if category:
+            query = query.where("category", "==", category)
+        if start:
+            query = query.where("date", ">=", start)
+        if end:
+            query = query.where("date", "<=", end + "\uf8ff")
         return [d.to_dict() | {"id": d.id} for d in query.stream()]
 
     # ---- processed receipts (avoid double-deducting stock on re-sync) ----
