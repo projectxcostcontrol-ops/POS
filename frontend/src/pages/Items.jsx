@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
+import SetupGate from '../components/SetupGate';
 
 export default function Items() {
   const { storeId } = useStore();
@@ -20,7 +21,7 @@ export default function Items() {
   }
   useEffect(load, [storeId]);
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="เห็นเมนูในร้าน" />;
 
   const catName = (id) => categories.find((c) => c.id === id)?.name || 'ไม่มีหมวดหมู่';
   const visible = items

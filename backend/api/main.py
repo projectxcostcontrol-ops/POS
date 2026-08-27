@@ -1225,14 +1225,14 @@ def sales_overview(store_id: str, from_: str | None = None, to: str | None = Non
     # percentage against last month needs a total, nothing more.
     comparison = None
     if compare:
-        p_start, p_end = sales_report.previous_window(start, end)
+        p_start, p_end, basis = sales_report.comparison_window(start, end)
         if granularity == "hour":
             previous = sales_report.summarise(
                 c.store.list_sales(store_id, p_start, p_end), {}, [], granularity, tz)
         else:
             previous = daily_rollup.summarise(
                 _rollups_for(c, store_id, p_start, p_end, tz), {}, [])
-        comparison = sales_report.compare_previous(current, previous)
+        comparison = sales_report.compare_previous(current, previous, basis)
 
     return {
         **current,
@@ -1264,11 +1264,19 @@ def alerts(store_id: str, c: Ctx = Depends(store_ctx)):
     sessions = c.store.list_count_sessions(store_id)
     last_closed = next((s.get("closed_at") for s in sessions
                         if s.get("status") == "closed"), None)
-    return sales_report.build_alerts(
-        materials=c.store.list_materials(store_id),
-        pending_drafts=len(c.store.list_drafts(store_id)),
-        last_count_at=last_closed,
-    )
+    return {
+        **sales_report.build_alerts(
+            materials=c.store.list_materials(store_id),
+            pending_drafts=len(c.store.list_drafts(store_id)),
+            last_count_at=last_closed,
+        ),
+        # "Has this branch ever pulled anything from the POS." One document
+        # read, and it is the only honest signal - a branch with no sales
+        # TODAY is not the same thing as a branch that has never synced,
+        # and a new shop shown "no data yet" on a quiet Tuesday would be
+        # told to fix something that is not broken.
+        "never_synced": c.store.get_sync_cursor(store_id) is None,
+    }
 
 
 @app.get("/api/{store_id}/brief")
@@ -2102,7 +2110,29 @@ def get_me(c: Ctx = Depends(ctx)):
         # None means nobody has said yet, which is the browser's cue to
         # say. A number here is the shop's answer and is not asked again.
         "timezone_offset": c.stored_tz,
+        # Read from the same settings document the timezone comes from, so
+        # it costs nothing extra.
+        "onboarding_dismissed_at": c.store.get_setting("onboarding_dismissed_at"),
     }
+
+
+@app.post("/api/settings/onboarding/dismiss")
+def dismiss_onboarding(c: Ctx = Depends(ctx)):
+    """Put the getting-started card away.
+
+    Stored rather than derived, and it is the one piece of setup state
+    that should be: whether a step is DONE is a fact about the shop and
+    is read from the shop every time, but whether someone wants to be
+    reminded is a choice, and a choice cannot be worked out from data.
+
+    A timestamp rather than a flag, because the card comes back after a
+    day if the branch still has not synced - a shop that connected the
+    week before it opens should not have to look at it every hour, and a
+    card dismissed into nowhere is its own kind of dead end.
+    """
+    now = _now()
+    c.store.set_setting("onboarding_dismissed_at", now)
+    return {"onboarding_dismissed_at": now}
 
 
 @app.post("/api/settings/timezone")

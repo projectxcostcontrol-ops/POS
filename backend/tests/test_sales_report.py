@@ -355,10 +355,14 @@ def test_comparison_returns_nothing_when_there_is_no_baseline():
           sales_report.compare_previous({"total": 500}, {"total": 0}), None)
     check("a real baseline compares",
           sales_report.compare_previous({"total": 550}, {"total": 500}),
-          {"pct": 10.0, "up": True})
+          {"pct": 10.0, "up": True, "basis": "previous_span"})
     check("a drop is marked as down",
           sales_report.compare_previous({"total": 450}, {"total": 500}),
-          {"pct": 10.0, "up": False})
+          {"pct": 10.0, "up": False, "basis": "previous_span"})
+    check("and the number says what it was measured against",
+          sales_report.compare_previous({"total": 550}, {"total": 500},
+                                        "same_hours_yesterday")["basis"],
+          "same_hours_yesterday")
 
 
 def test_previous_window_is_the_same_length_immediately_before():
@@ -479,6 +483,47 @@ def test_the_overlap_is_wide_enough_for_a_delayed_terminal():
     check("at least an hour of overlap", SYNC_OVERLAP_SECONDS >= 3600, True)
 
 
+def test_this_morning_is_compared_with_yesterday_morning():
+    section("This morning is compared with yesterday morning, not last night")
+
+    # Nine in the morning. The obvious rule - the equally long span
+    # immediately before - reaches back across midnight into the dinner
+    # rush, so a shop trading perfectly normally would open the app to a
+    # large red number every single morning, forever.
+    start, end = "2026-08-27T00:00:00.000Z", "2026-08-27T09:00:00.000Z"
+    p_start, p_end, basis = sales_report.comparison_window(start, end)
+    check("the comparison is the same hours of yesterday",
+          (p_start, p_end), ("2026-08-26T00:00:00.000Z", "2026-08-26T09:00:00.000Z"))
+    check("and says so", basis, "same_hours_yesterday")
+    check("it is nine hours long, exactly like the window it answers",
+          p_end.endswith("T09:00:00.000Z") and p_start.endswith("T00:00:00.000Z"), True)
+    check("what the old rule would have compared against instead",
+          sales_report.previous_window(start, end),
+          ("2026-08-26T15:00:00.000Z", "2026-08-27T00:00:00.000Z"))
+
+    # One whole day picked by hand is still a day, and belongs against
+    # the day before rather than the 24 hours ending at its start.
+    day = sales_report.comparison_window("2026-08-26T00:00:00.000Z",
+                                         "2026-08-26T23:59:59.999Z")
+    check("a single chosen day compares with the day before",
+          day[0].startswith("2026-08-25"), True)
+    check("also by the clock", day[2], "same_hours_yesterday")
+
+    # Anything longer keeps the old rule, which was right for it.
+    week = sales_report.comparison_window("2026-08-21T00:00:00.000Z",
+                                          "2026-08-27T09:00:00.000Z")
+    check("a week still compares with the equally long span before it",
+          week[2], "previous_span")
+    check("month too",
+          sales_report.comparison_window("2026-08-01T00:00:00.000Z",
+                                         "2026-08-27T09:00:00.000Z")[2],
+          "previous_span")
+
+    check("an unreadable window is refused rather than guessed at",
+          sales_report.comparison_window("not a date", "also not")[2],
+          "previous_span")
+
+
 def main():
     print("Running sales copy & reporting tests (offline)")
 
@@ -504,6 +549,7 @@ def main():
     test_daily_breakdown_is_newest_first()
     test_comparison_returns_nothing_when_there_is_no_baseline()
     test_previous_window_is_the_same_length_immediately_before()
+    test_this_morning_is_compared_with_yesterday_morning()
     test_alerts_only_flag_materials_with_a_par_level()
     test_alerts_surface_negative_stock_separately()
     test_never_counted_is_treated_as_due()

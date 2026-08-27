@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { compressImage } from '../utils/imageCompress';
 import MaterialPicker from '../components/MaterialPicker';
 import { newId } from '../util/ids';
+import SetupGate from '../components/SetupGate';
 
 export default function Receiving() {
   const { storeId } = useStore();
@@ -48,7 +49,7 @@ export default function Receiving() {
     }
   }
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="บันทึกซื้อของเข้าร้านได้" />;
 
   const materialName = (id) => materials.find((m) => m.id === id)?.name || id;
   const materialUnit = (id) => materials.find((m) => m.id === id)?.unit || '';

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
+import SetupGate from '../components/SetupGate';
 
 /**
  * The gap between what recipes predicted and what a count actually found.
@@ -39,7 +40,7 @@ export default function Variance() {
       .finally(() => setLoading(false));
   }, [storeId, selected]);
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="ดูส่วนต่างได้" />;
 
   if (sessions.length === 0) {
     return (

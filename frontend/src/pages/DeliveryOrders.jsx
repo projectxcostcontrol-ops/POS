@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { newId } from '../util/ids';
+import SetupGate from '../components/SetupGate';
 
 /**
  * Orders that never went through the till.
@@ -102,7 +103,7 @@ export default function DeliveryOrders() {
     }
   }
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="บันทึกออเดอร์นอกร้านได้" />;
 
   return (
     <div>

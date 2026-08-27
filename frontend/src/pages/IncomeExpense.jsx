@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
+import SetupGate from '../components/SetupGate';
 
 const CATS = { fixed: 'ค่าใช้จ่ายคงที่', variable: 'ค่าใช้จ่ายผันแปร', material: 'ค่าวัตถุดิบ' };
 const now = new Date();
@@ -89,7 +90,7 @@ export default function IncomeExpense() {
       api.getExpenses(storeId, c).then((list) => setExpenses((prev) => ({ ...prev, [c]: list }))));
   }, [storeId]);
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="ดูรายรับรายจ่ายได้" />;
 
   // Dates on expenses and deliveries are days, not instants - both come
   // from a date input as YYYY-MM-DD. Parsing them into a Date reads them

@@ -3,6 +3,7 @@ import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import MaterialPicker from '../components/MaterialPicker';
+import SetupGate from '../components/SetupGate';
 
 const KIND_LABEL = {
   cooked: 'อาหารปรุงเอง',
@@ -47,7 +48,7 @@ export default function Recipes() {
       .catch(() => setDrafts({}));
   }
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="ผูกสูตรอาหารได้" />;
 
   const materialUnit = (id) => materials.find((m) => m.id === id)?.unit || '';
   const materialCost = (id) => materials.find((m) => m.id === id)?.cost || 0;

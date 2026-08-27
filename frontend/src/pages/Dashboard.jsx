@@ -8,6 +8,7 @@ import {
   ArrowClockwise, CalendarBlank, CaretRight, CheckCircle, ClipboardText,
   CookingPot, Package, ShoppingCart, WarningCircle,
 } from '@phosphor-icons/react';
+import SetupGate from '../components/SetupGate';
 
 const PERIODS = [
   { id: 'day', label: 'วันนี้' },
@@ -47,6 +48,7 @@ export default function Dashboard() {
   const [refreshNote, setRefreshNote] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [brief, setBrief] = useState(null);
+  const [setupHidden, setSetupHidden] = useState(false);
 
   // Alerts load independently of the sales figures. If the sales endpoints
   // fail, staff should still see that stock is running out - the two
@@ -106,7 +108,20 @@ export default function Dashboard() {
     }
   }
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  // The header stays. A brand-new shop landing on a single card floating
+  // in white space reads as an error page; with its own name above it, it
+  // reads as a shop that is one step from being set up.
+  if (!storeId) return (
+    <div className="dashboard-page">
+      <div className="page-header dashboard-header">
+        <div>
+          <p className="eyebrow">{profile.business_name || 'ล้านครัว'}</p>
+          <h1>ยินดีต้อนรับ</h1>
+        </div>
+      </div>
+      <SetupGate what="เห็นภาพรวมร้าน" />
+    </div>
+  );
 
 
   return (
@@ -141,9 +156,21 @@ export default function Dashboard() {
         </p>
       )}
 
-      {showMoney && <YesterdayBrief brief={brief} />}
+      <FirstSync alerts={alerts} profile={profile} hidden={setupHidden}
+        busy={refreshing} onSync={refreshAll}
+        onHide={() => { setSetupHidden(true); api.dismissOnboarding().catch(() => {}); }} />
 
-      <Alerts alerts={alerts} />
+      {/* Nothing has been pulled from the POS yet, so every one of these
+          is premature: a summary of a day the shop has no record of, and
+          a reminder to count stock that does not exist. Before the first
+          sync there is exactly one thing worth saying, and the card above
+          says it. */}
+      {!alerts?.never_synced && (
+        <>
+          {showMoney && <YesterdayBrief brief={brief} />}
+          <Alerts alerts={alerts} />
+        </>
+      )}
 
       {showMoney ? (
         <>
@@ -214,6 +241,64 @@ function BranchPicker({ stores, storeId, onSelect }) {
         <option key={s.id} value={s.id}>{describe(s)}</option>
       ))}
     </select>
+  );
+}
+
+
+/**
+ * The one thing left to do, on a shop that has connected but never
+ * pulled anything from its POS.
+ *
+ * Not a checklist. Connecting and syncing happen in order, so at any
+ * moment there is exactly one thing to press - and a list of one item
+ * is a list that exists to look thorough. Step one (connect Loyverse)
+ * is not here at all: without a branch there is no dashboard to put a
+ * card on, so that step is the whole page (see SetupGate).
+ *
+ * It disappears the moment the first bills arrive, and what replaces it
+ * is the shop's own figures. The rest of setting up - ingredients,
+ * recipes, the first stock count - is deliberately NOT listed. Those
+ * take days rather than seconds, and the app already raises them where
+ * they matter: beside the profit figure that is wrong without them, and
+ * in the morning summary. A warning next to the number it affects beats
+ * the same warning as item four of a chore list.
+ *
+ * "ไว้ทีหลัง" hides it for a day rather than forever. A shop that
+ * connected the week before it opens should not have to look at this
+ * every hour, and a card dismissed into nowhere cannot be found again.
+ */
+function FirstSync({ alerts, profile, hidden, busy, onSync, onHide }) {
+  if (hidden || !alerts?.never_synced) return null;
+
+  const dismissedAt = profile?.onboarding_dismissed_at;
+  if (dismissedAt && Date.now() - new Date(dismissedAt).getTime() < 86400000) {
+    return null;
+  }
+
+  return (
+    <section style={{
+      background: 'var(--surface-2)', border: '1px solid var(--border)',
+      borderRadius: 12, padding: '15px 16px', marginBottom: 20,
+    }}>
+      <p style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>
+        เชื่อมต่อแล้ว — ดึงยอดขายเข้ามาเลย
+      </p>
+      <p style={{ fontSize: 12.5, color: 'var(--text-secondary)', margin: '5px 0 12px' }}>
+        ระบบจะดึงเองทุกไม่กี่นาที กดตรงนี้ถ้าไม่อยากรอ
+      </p>
+      <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+        <button className="button-primary" onClick={onSync} disabled={busy}>
+          <ArrowClockwise size={18} className={busy ? 'spin' : ''} />
+          {busy ? 'กำลังดึง...' : 'ดึงยอดขาย'}
+        </button>
+        <button onClick={onHide} style={{
+          background: 'none', border: 0, padding: '0 4px',
+          fontSize: 12.5, fontWeight: 500, color: 'var(--text-muted)',
+        }}>
+          ไว้ทีหลัง
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -387,14 +472,29 @@ function SummaryCard({ summary, period }) {
             </div>
           </div>
           {/* No comparison when there's no previous period to compare with -
-              a made-up 0% would read as a real result. */}
+              a made-up 0% would read as a real result.
+
+              The basis is spelled out because the two comparisons answer
+              different questions, and a bare percentage leaves the reader
+              to guess which one they are looking at. */}
           {summary.compare && (
-            <span style={{
-              fontSize: 11.5, fontWeight: 600, padding: '3px 8px', borderRadius: 20,
-              color: summary.compare.up ? 'var(--text-success)' : 'var(--text-danger)',
-              background: 'var(--surface-1)',
-            }}>
-              {summary.compare.up ? '↑' : '↓'} {summary.compare.pct}%
+            <span style={{ textAlign: 'right' }}>
+              <span style={{
+                display: 'block',
+                fontSize: 11.5, fontWeight: 600, padding: '3px 8px', borderRadius: 20,
+                color: summary.compare.up ? 'var(--text-success)' : 'var(--text-danger)',
+                background: 'var(--surface-1)',
+              }}>
+                {summary.compare.up ? '↑' : '↓'} {summary.compare.pct}%
+              </span>
+              <span style={{
+                display: 'block', fontSize: 10, color: 'var(--text-muted)',
+                marginTop: 3, whiteSpace: 'nowrap',
+              }}>
+                {summary.compare.basis === 'same_hours_yesterday'
+                  ? 'เทียบเวลาเดียวกันเมื่อวาน'
+                  : 'เทียบช่วงก่อนหน้า'}
+              </span>
             </span>
           )}
         </div>

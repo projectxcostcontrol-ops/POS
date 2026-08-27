@@ -152,17 +152,21 @@ def daily_breakdown(sales: list[dict]) -> list[dict]:
     return rows
 
 
-def compare_previous(current: dict, previous: dict) -> dict | None:
-    """Percentage change against the preceding period of equal length.
+def compare_previous(current: dict, previous: dict,
+                     basis: str = "previous_span") -> dict | None:
+    """Percentage change against whatever comparison_window picked.
 
     A bare "฿4,250" can't tell anyone whether today went well. Returns
     None when there's nothing to compare against, so the caller shows
-    nothing rather than a made-up 0% or a misleading +100%."""
+    nothing rather than a made-up 0% or a misleading +100%.
+
+    `basis` travels with the number so the screen can name the thing it
+    is measured against - see comparison_window."""
     prev_total = previous.get("total") or 0
     if prev_total <= 0:
         return None
     change = (current.get("total", 0) - prev_total) / prev_total * 100
-    return {"pct": round(abs(change), 1), "up": change >= 0}
+    return {"pct": round(abs(change), 1), "up": change >= 0, "basis": basis}
 
 
 def previous_window(start: str, end: str) -> tuple[str, str]:
@@ -174,6 +178,43 @@ def previous_window(start: str, end: str) -> tuple[str, str]:
     # Same canonical format as everything else - these bounds are compared
     # as strings against saved sale dates.
     return _fmt(s - span), _fmt(s)
+
+
+def same_hours_previous_day(start: str, end: str) -> tuple[str, str]:
+    """The same hours of the clock, one day earlier."""
+    s, e = _parse(start), _parse(end)
+    if s is None or e is None:
+        return start, end
+    day = timedelta(days=1)
+    return _fmt(s - day), _fmt(e - day)
+
+
+def comparison_window(start: str, end: str) -> tuple[str, str, str]:
+    """Which window this one should be measured against, and why.
+
+    For anything a day or longer, the equally-long span immediately
+    before: this month against the month before it.
+
+    For anything shorter - which in practice means "today so far" - the
+    SAME HOURS of yesterday. The obvious rule, an equally-long span
+    immediately before, quietly compares the wrong thing here: at nine in
+    the morning it measures nine hours of breakfast against the nine
+    hours ending at midnight, which for a restaurant is the dinner rush.
+    A shop doing perfectly normal trade would open the app every single
+    morning to a large red number, forever, and the figure was arithmetic
+    that could not be argued with - which is the worst kind of wrong,
+    because there is nothing to notice.
+
+    The basis comes back with the bounds so the screen can say which
+    comparison it is showing. A percentage that does not say what it is
+    measured against is a percentage the reader has to guess at.
+    """
+    s, e = _parse(start), _parse(end)
+    if s is None or e is None:
+        return start, end, "previous_span"
+    if e - s <= timedelta(days=1):
+        return (*same_hours_previous_day(start, end), "same_hours_yesterday")
+    return (*previous_window(start, end), "previous_span")
 
 
 def build_alerts(materials: list[dict], pending_drafts: int,

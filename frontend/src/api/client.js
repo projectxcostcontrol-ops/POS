@@ -137,6 +137,8 @@ export const api = {
       { method: 'DELETE' }),
 
   getMe: () => request('/api/me'),
+  dismissOnboarding: () =>
+    request('/api/settings/onboarding/dismiss', { method: 'POST' }),
   setTimezone: (offsetMinutes) =>
     request('/api/settings/timezone', {
       method: 'POST',

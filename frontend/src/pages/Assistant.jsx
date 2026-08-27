@@ -6,6 +6,7 @@ import {
   ArrowRight, BookmarkSimple, CheckCircle, LockKey, PaperPlaneRight,
   Play, WarningCircle, X,
 } from '@phosphor-icons/react';
+import SetupGate from '../components/SetupGate';
 
 /**
  * Asking a question about the shop's own figures.
@@ -166,7 +167,7 @@ export default function Assistant() {
     }
   }
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="ถามข้อมูลร้านได้" />;
 
   return (
     <div>

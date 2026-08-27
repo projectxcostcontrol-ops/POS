@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import SalesChart from '../components/SalesChart';
+import SetupGate from '../components/SetupGate';
 
 const PERIODS = [
   { id: 'week', label: 'สัปดาห์นี้' },
@@ -86,7 +87,7 @@ export default function Receipts() {
     }).catch(() => setDayBills([]));
   }
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="เห็นรายการขาย" />;
 
   return (
     <div>

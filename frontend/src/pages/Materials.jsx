@@ -3,6 +3,7 @@ import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { newId } from '../util/ids';
+import SetupGate from '../components/SetupGate';
 
 const UNITS = ['กรัม', 'กก.', 'มล.', 'ลิตร', 'ชิ้น', 'ขวด'];
 
@@ -32,7 +33,7 @@ export default function Materials() {
   }
   useEffect(load, [storeId]);
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="จัดการของในครัวได้" />;
 
   function status(m) {
     const stock = m.stock ?? 0;

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
 import VarianceSummary from '../components/VarianceSummary';
+import SetupGate from '../components/SetupGate';
 
 /**
  * Counting a kitchen takes longer than one sitting, so entries save as
@@ -39,7 +40,7 @@ export default function StockCount() {
     }).catch(() => {});
   }, [storeId]);
 
-  if (!storeId) return <p>เลือกสาขาในหน้าตั้งค่าก่อน</p>;
+  if (!storeId) return <SetupGate what="เช็กสต๊อกได้" />;
 
   async function start() {
     setBusy(true);
