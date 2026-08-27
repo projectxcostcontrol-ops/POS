@@ -33,6 +33,7 @@ from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
 from core import daily_rollup
+from core import daily_brief
 from core.expenses import clean_expense, ExpenseError
 from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
@@ -78,6 +79,20 @@ app.add_middleware(CORSMiddleware, allow_origins=_origins,
 # directly; every business endpoint works through a tenant-scoped view.
 root_store = Store()
 vision = build_default_chain()
+
+
+def _assistant():
+    """The assistant provider, or None when there is no key for one.
+
+    None rather than a stub that returns apologies: the brief is written
+    without a model and is complete without one, so "no provider" is a
+    normal state, not a degraded one.
+    """
+    if not os.environ.get("GEMINI_API_KEY"):
+        return None
+    from adapters.gemini_assistant import GeminiAssistantAdapter
+    return GeminiAssistantAdapter()
+
 suggester = RecipeSuggester()
 
 current_claims, current_user, current_admin, _require, check_store_access = \
@@ -1251,6 +1266,80 @@ def alerts(store_id: str, c: Ctx = Depends(store_ctx)):
         pending_drafts=len(c.store.list_drafts(store_id)),
         last_count_at=last_closed,
     )
+
+
+@app.get("/api/{store_id}/brief")
+def daily_brief_for(store_id: str, date: str | None = None,
+                    c: Ctx = Depends(store_money)):
+    """Yesterday in a few lines, written once and kept.
+
+    Built the first time anyone asks for a given day and stored, so the
+    second person to open the app that morning - and the same person
+    opening it again at noon - reads one document instead of rebuilding
+    it. Thrown away with the day it summarises whenever a late bill
+    changes that day (see Store.delete_daily).
+
+    Deliberately lazy rather than scheduled. A nightly job would need a
+    scheduler this app does not have, would run for branches nobody
+    looks at, and would go wrong quietly at four in the morning; asking
+    for it is what proves someone wants it.
+    """
+    tz = c.tz_offset
+    today = daily_rollup.local_day(_now(), tz)
+    day = date or _shift_day(today, -1)
+
+    if day >= today:
+        # Today is still selling. A brief for it would be a half-day
+        # reported as a day, which is the one shape of wrong that looks
+        # exactly like a bad day.
+        return {"date": day, "ready": False,
+                "reason": "วันนี้ยังขายไม่จบ สรุปจะมีให้พรุ่งนี้เช้า"}
+
+    stored = c.store.get_brief(store_id, day)
+    if stored:
+        return {**stored, "ready": True, "cached": True}
+
+    # The day itself plus the run it is measured against, in one read.
+    first = _shift_day(day, -daily_brief.BASELINE_DAYS)
+    rollups = daily_rollup.ensure_daily(c.store, store_id, first, day, tz, today)
+
+    sessions = c.store.list_count_sessions(store_id)
+    last_closed = next((s.get("closed_at") for s in sessions
+                        if s.get("status") == "closed"), None)
+
+    brief = daily_brief.build(
+        day=day,
+        rollups=rollups,
+        recipes=c.store.all_recipes(store_id),
+        materials=c.store.list_materials(store_id),
+        days_since_count=_days_since(last_closed),
+    )
+
+    provider = _assistant()
+    if provider is not None:
+        brief = daily_brief.polish(provider, brief)
+
+    c.store.set_brief(store_id, day, brief)
+    return {**brief, "ready": True, "cached": False}
+
+
+def _shift_day(day: str, days: int) -> str:
+    return (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=days)) \
+        .strftime("%Y-%m-%d")
+
+
+def _days_since(iso: str | None) -> int | None:
+    """None means never, which needs a different sentence from 'a while
+    ago' - one is a setup step, the other a habit that slipped."""
+    if not iso:
+        return None
+    try:
+        then = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - then).days
 
 
 @app.get("/api/{store_id}/sales/reconcile")

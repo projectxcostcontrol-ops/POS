@@ -980,9 +980,23 @@ class Store:
         if isinstance(days, str):
             days = [days]
         col = self._daily_col(store_id)
+        briefs = self._col(store_id, "daily_briefs")
         for day in days:
             if day:
                 col.document(day).delete()
+                # The morning brief is written from the day it summarises,
+                # so a day worth rebuilding is a brief worth rebuilding.
+                # Kept here rather than left to each caller: there is one
+                # place a day gets thrown away, and everything derived
+                # from that day should go with it.
+                briefs.document(day).delete()
+
+    def get_brief(self, store_id: str, day: str) -> dict | None:
+        doc = self._col(store_id, "daily_briefs").document(day).get()
+        return doc.to_dict() if doc.exists else None
+
+    def set_brief(self, store_id: str, day: str, brief: dict):
+        self._col(store_id, "daily_briefs").document(day).set(brief)
 
     # ---- where the shop is ---------------------------------------------
     # Until now the browser sent its own offset with every request, which

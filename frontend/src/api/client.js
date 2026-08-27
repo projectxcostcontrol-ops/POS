@@ -228,6 +228,8 @@ export const api = {
   getDailySales: (storeId, from, to) =>
     request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}`),
+  getBrief: (storeId, date) =>
+    request(`/api/${storeId}/brief${date ? `?date=${date}` : ''}`),
   getAlerts: (storeId) => request(`/api/${storeId}/alerts`),
   reconcileSales: (storeId, days = 1) =>
     request(`/api/${storeId}/sales/reconcile?days=${days}`),

@@ -46,6 +46,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshNote, setRefreshNote] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [brief, setBrief] = useState(null);
 
   // Alerts load independently of the sales figures. If the sales endpoints
   // fail, staff should still see that stock is running out - the two
@@ -54,6 +55,14 @@ export default function Dashboard() {
     if (!storeId) return;
     api.getAlerts(storeId).then(setAlerts).catch(() => setAlerts(null));
   }, [storeId, reloadKey]);
+
+  // Yesterday's summary. Loads on its own like the alerts do: it is
+  // about a different day from everything else on this screen, and a
+  // failure to fetch it should not take the day's figures with it.
+  useEffect(() => {
+    if (!storeId || !showMoney) return;
+    api.getBrief(storeId).then(setBrief).catch(() => setBrief(null));
+  }, [storeId, showMoney, reloadKey]);
 
   useEffect(() => {
     if (!storeId || !showMoney) return;
@@ -132,6 +141,8 @@ export default function Dashboard() {
         </p>
       )}
 
+      {showMoney && <YesterdayBrief brief={brief} />}
+
       <Alerts alerts={alerts} />
 
       {showMoney ? (
@@ -203,6 +214,49 @@ function BranchPicker({ stores, storeId, onSelect }) {
         <option key={s.id} value={s.id}>{describe(s)}</option>
       ))}
     </select>
+  );
+}
+
+
+/**
+ * Yesterday, in the few lines someone reads over coffee.
+ *
+ * Written by the backend from the same rollups this screen is drawn
+ * from, not by a model - see core/daily_brief.py. A model may have
+ * rephrased it, and if it did, every figure in it was checked against
+ * the data afterwards; if that check failed the plain version is what
+ * arrives here. Nothing on this side needs to know which happened.
+ *
+ * Renders nothing at all until there is something to say. A card that
+ * says "no summary yet" every morning is a card people learn to skip,
+ * and then they skip it on the morning it says something.
+ */
+function YesterdayBrief({ brief }) {
+  if (!brief || !brief.ready) return null;
+
+  const text = brief.polished || brief.text;
+  if (!text) return null;
+
+  const lines = text.split('\n').filter(Boolean);
+
+  return (
+    <section style={{ marginBottom: 22 }}>
+      <p className="section-label">เมื่อวาน</p>
+      <div style={{
+        background: 'var(--surface-2)', border: '1px solid var(--border)',
+        borderRadius: 10, padding: '13px 15px',
+      }}>
+        {lines.map((line, i) => (
+          <p key={i} style={{
+            margin: i === 0 ? 0 : '6px 0 0',
+            fontSize: i === 0 ? 14 : 13,
+            fontWeight: i === 0 ? 600 : 400,
+            lineHeight: 1.55,
+            color: i === 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
+          }}>{line}</p>
+        ))}
+      </div>
+    </section>
   );
 }
 
