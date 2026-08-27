@@ -937,6 +937,80 @@ class Store:
         self._col(store_id, "sync_state").document("backfill").set(
             {"done": True, "at": at})
 
+    # ---- daily rollups (one document per trading day) ------------------
+    # See core/daily_rollup.py for what a row holds and, more importantly,
+    # what it deliberately does not. Here it is only storage: the day is
+    # the document id, so a day can be thrown away by name when something
+    # that fed it changes.
+
+    def _daily_col(self, store_id: str):
+        return self._col(store_id, "sales_daily")
+
+    def list_daily(self, store_id: str, start_day: str, end_day: str) -> list[dict]:
+        """Stored days in a range, oldest first.
+
+        A range query, so days that were never built cost nothing to ask
+        about - which is what makes it safe to ask for a whole month and
+        let the caller fill in whatever came back missing.
+        """
+        query = (self._daily_col(store_id)
+                 .where("date", ">=", start_day)
+                 .where("date", "<=", end_day)
+                 .order_by("date"))
+        return [d.to_dict() or {} for d in query.stream()]
+
+    def set_daily_many(self, store_id: str, rows: list[dict]):
+        """Write built days in one batch - a month is one round trip."""
+        col = self._daily_col(store_id)
+        BATCH = 400
+        for i in range(0, len(rows), BATCH):
+            batch = self.db.batch()
+            for row in rows[i:i + BATCH]:
+                batch.set(col.document(row["date"]), row)
+            batch.commit()
+
+    def delete_daily(self, store_id: str, days):
+        """Throw days away so they are rebuilt from the bills next time.
+
+        Deleting rather than rewriting is the point: whatever changed -
+        a late bill, a cancelled delivery order, a repair - the honest
+        answer is "recount that day", and a row that is absent cannot be
+        subtly wrong the way a row patched by hand can.
+        """
+        if isinstance(days, str):
+            days = [days]
+        col = self._daily_col(store_id)
+        for day in days:
+            if day:
+                col.document(day).delete()
+
+    # ---- where the shop is ---------------------------------------------
+    # Until now the browser sent its own offset with every request, which
+    # works for a screen someone is looking at and not at all for anything
+    # the server does alone - a nightly rollup or a morning summary has no
+    # browser to ask. So the shop's offset is stored once, the first time
+    # a browser is around to tell us, and used from then on.
+
+    def get_timezone(self, default: int = 420) -> int:
+        value = self.get_setting("timezone_offset")
+        return default if value is None else int(value)
+
+    def set_timezone(self, offset_minutes: int, only_if_unset: bool = True) -> int:
+        """Records the shop's offset. By default the first answer wins.
+
+        A browser in a different country - the owner travelling, a
+        developer looking at a customer's account - would otherwise
+        silently redraw every day boundary in the shop's history.
+        """
+        current = self.get_setting("timezone_offset")
+        if current is not None and only_if_unset:
+            return int(current)
+        offset = int(offset_minutes)
+        if not -840 <= offset <= 840:
+            raise ValueError("timezone_offset อยู่นอกช่วงที่เป็นไปได้")
+        self.set_setting("timezone_offset", offset)
+        return offset
+
     # ---- AI recipe drafts (step 3.3) ----
     # A draft is a proposal, not a recipe. It holds which ingredients a
     # menu probably uses; the quantities are still blank because a person

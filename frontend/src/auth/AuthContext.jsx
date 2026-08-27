@@ -32,8 +32,18 @@ export function AuthProvider({ children }) {
   const loadProfile = useCallback(async () => {
     setProfileError('');
     try {
-      setProfile(await api.getMe());
+      const me = await api.getMe();
+      setProfile(me);
       setNeedsSignup(false);
+      // The shop's timezone, told to the server once, by the only thing
+      // that knows it. Every day boundary in the reports depends on it,
+      // and the server has to be able to work one out with nobody
+      // watching - so it cannot keep asking the browser. Silent on
+      // purpose: it is not a setting anyone chose, and a failure here
+      // costs nothing that the next sign-in will not fix.
+      if (me?.timezone_offset === null || me?.timezone_offset === undefined) {
+        api.setTimezone(-new Date().getTimezoneOffset()).catch(() => {});
+      }
     } catch (e) {
       setProfile(null);
       if (e.status === 409) {

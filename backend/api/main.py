@@ -32,6 +32,7 @@ from core.pos_registry import PosRegistry
 from core.recipe_suggester import RecipeSuggester
 from core import variance as variance_lib
 from core import sales_report
+from core import daily_rollup
 from core.expenses import clean_expense, ExpenseError
 from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
@@ -130,6 +131,16 @@ def _valid_public_target(value: str) -> str:
 # Endpoints ask for a Ctx instead of reaching for module-level state, which
 # is what makes tenant isolation structural rather than a rule to remember.
 
+# Bangkok. Every shop using this today is in Thailand, and a default has
+# to be something - but it is only used until a browser says otherwise.
+DEFAULT_TZ_OFFSET = 420
+
+# Distinguishes "not looked up yet" from "looked up, the shop has not
+# said" - both of which are None-ish, and only one of which should cost
+# a read.
+_UNREAD = object()
+
+
 class Ctx:
     def __init__(self, user: dict):
         self.user = user
@@ -140,6 +151,34 @@ class Ctx:
         self.pos = PosRegistry(self.store,
                                lambda conn: _adapter_for(self.tenant_id, conn),
                                _now())
+        self._tz = _UNREAD
+
+    # ---- where the shop is -------------------------------------------
+    # The browser's offset is the browser's. A summary of a Bangkok
+    # shop's Tuesday has to be the same Tuesday whether the owner opens
+    # it from the shop, from a hotel in Europe, or not at all - and that
+    # last case is what decides it, because nothing the server does on
+    # its own has a browser to ask. Read once per request, not per call.
+
+    @property
+    def stored_tz(self) -> int | None:
+        if self._tz is _UNREAD:
+            value = self.store.get_setting("timezone_offset")
+            self._tz = None if value is None else int(value)
+        return self._tz
+
+    @property
+    def tz_offset(self) -> int:
+        """The shop's offset, falling back to Bangkok."""
+        stored = self.stored_tz
+        return DEFAULT_TZ_OFFSET if stored is None else stored
+
+    def tz_or(self, requested: int) -> int:
+        """The shop's offset if it has one, otherwise what the caller
+        says. A browser that is here now beats a default that is a
+        guess - but it never overrides an answer the shop has given."""
+        stored = self.stored_tz
+        return requested if stored is None else stored
 
     # ---- Loyverse accounts -------------------------------------------
     # There is deliberately no `c.provider`. A business can hold several
@@ -1102,6 +1141,25 @@ def _recipes_for(c: Ctx, store_id: str, sales: list[dict]) -> dict:
     return {n: all_recipes.get(n, []) for n in names}
 
 
+def _recipes_for_menus(c: Ctx, store_id: str, names: set) -> dict:
+    """Same as _recipes_for, for menus already known by name."""
+    if not names:
+        return {}
+    all_recipes = c.store.all_recipes(store_id)
+    return {n: all_recipes.get(n, []) for n in names}
+
+
+def _rollups_for(c: Ctx, store_id: str, start: str, end: str,
+                 tz: int) -> list[dict]:
+    """The stored day-rows covering a window given as two instants."""
+    first = daily_rollup.local_day(start, tz)
+    last = daily_rollup.local_day(end, tz)
+    if not first or not last:
+        return []
+    return daily_rollup.ensure_daily(
+        c.store, store_id, first, last, tz, daily_rollup.local_day(_now(), tz))
+
+
 @app.get("/api/{store_id}/sales/overview")
 def sales_overview(store_id: str, from_: str | None = None, to: str | None = None,
                    granularity: str = "day", tz_offset: int = 0, top: int = 5,
@@ -1114,15 +1172,31 @@ def sales_overview(store_id: str, from_: str | None = None, to: str | None = Non
     window again. On a busy month that was thousands of documents fetched
     to answer one screen.
 
-    `tz_offset` is minutes ahead of UTC (Bangkok = 420); chart buckets
-    follow the shop's clock, not the server's - see _bucket_key.
+    Now a window of whole days is answered from one row per day (see
+    core/daily_rollup), so a month costs about thirty reads instead of
+    three thousand. An hour-by-hour view still reads the bills: it is
+    always today or yesterday, so it is one day of them, and storing an
+    hourly summary would be twenty-four times the rows to save a page
+    nobody opens for a month at a time.
+
+    `tz_offset` is what the browser thinks; the shop's own offset wins if
+    it has one. See Ctx.tz_offset.
     """
     start, end = _window(from_, to)
-    sales = c.store.list_sales(store_id, start, end)
+    tz = c.tz_or(tz_offset)
     materials = c.store.list_materials(store_id)
-    recipes = _recipes_for(c, store_id, sales)
 
-    current = sales_report.summarise(sales, recipes, materials, granularity, tz_offset)
+    if granularity == "hour":
+        sales = c.store.list_sales(store_id, start, end)
+        recipes = _recipes_for(c, store_id, sales)
+        current = sales_report.summarise(sales, recipes, materials, granularity, tz)
+        best = sales_report.top_items(sales, top)
+    else:
+        rollups = _rollups_for(c, store_id, start, end, tz)
+        recipes = _recipes_for_menus(c, store_id,
+                                     {n for r in rollups for n in (r.get("items") or {})})
+        current = daily_rollup.summarise(rollups, recipes, materials)
+        best = daily_rollup.top_items(rollups, top)
 
     # The comparison reads a second window of the same length, which for
     # a month is as many documents again as the answer itself. Only the
@@ -1134,23 +1208,35 @@ def sales_overview(store_id: str, from_: str | None = None, to: str | None = Non
     comparison = None
     if compare:
         p_start, p_end = sales_report.previous_window(start, end)
-        previous = sales_report.summarise(
-            c.store.list_sales(store_id, p_start, p_end), {}, [], granularity, tz_offset)
+        if granularity == "hour":
+            previous = sales_report.summarise(
+                c.store.list_sales(store_id, p_start, p_end), {}, [], granularity, tz)
+        else:
+            previous = daily_rollup.summarise(
+                _rollups_for(c, store_id, p_start, p_end, tz), {}, [])
         comparison = sales_report.compare_previous(current, previous)
 
     return {
         **current,
         "from": start, "to": end, "granularity": granularity,
         "compare": comparison,
-        "top_items": sales_report.top_items(sales, top),
+        "top_items": best,
     }
 
 
 @app.get("/api/{store_id}/sales/daily")
 def sales_daily(store_id: str, from_: str | None = None, to: str | None = None,
                 c: Ctx = Depends(store_money)):
+    """Per-day totals for the list beside the chart.
+
+    From the same rows the chart uses, which is not a detail: this used
+    to group by UTC while the chart grouped by the shop's clock, so an
+    evening bill appeared on one date in the list and the next date on
+    the graph directly above it.
+    """
     start, end = _window(from_, to)
-    return sales_report.daily_breakdown(c.store.list_sales(store_id, start, end))
+    return daily_rollup.breakdown(
+        _rollups_for(c, store_id, start, end, c.tz_offset))
 
 
 @app.get("/api/{store_id}/alerts")
@@ -1567,6 +1653,10 @@ def add_delivery_order(store_id: str, data: dict, c: Ctx = Depends(store_money))
     # by deleting it - rather than ingredients off the shelf with nothing
     # recording why.
     c.store.save_sale(store_id, number, row)
+    # An order for yesterday - keyed in this morning from the notebook -
+    # lands in a day that is already summarised. See invalidate_for_sales.
+    daily_rollup.invalidate_for_sales(c.store, store_id, [row], _now(),
+                                      c.tz_offset)
 
     recipes = c.store.all_recipes(store_id)
     known = set(c.store.list_material_ids(store_id))
@@ -1607,6 +1697,8 @@ def delete_delivery_order(store_id: str, order_id: str,
 
     returned = c.ledger.delete_by_ref(store_id, f"receipt:{order_id}")
     c.store.delete_sale(store_id, order_id)
+    daily_rollup.invalidate_for_sales(c.store, store_id, [sale], _now(),
+                                      c.tz_offset)
     return {"ok": True, "returned_materials": returned}
 
 
@@ -1655,7 +1747,29 @@ def get_me(c: Ctx = Depends(ctx)):
         "capabilities": sorted(CAPABILITIES.get(c.user["role"], set())),
         "tenant_id": c.tenant_id,
         "business_name": tenant.get("name", ""),
+        # None means nobody has said yet, which is the browser's cue to
+        # say. A number here is the shop's answer and is not asked again.
+        "timezone_offset": c.stored_tz,
     }
+
+
+@app.post("/api/settings/timezone")
+def set_timezone(data: dict, c: Ctx = Depends(ctx)):
+    """Records where the shop is, once, from the first browser to load.
+
+    Nobody is asked for this: a browser knows its own offset, and asking
+    a shop owner to pick a timezone from a list is a setup step that
+    earns nothing over reading it. Only the first answer is kept - see
+    Store.set_timezone for why a later browser must not overwrite it.
+    """
+    try:
+        offset = int(data.get("offset_minutes"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "offset_minutes ต้องเป็นตัวเลข")
+    try:
+        return {"timezone_offset": c.store.set_timezone(offset)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/users")

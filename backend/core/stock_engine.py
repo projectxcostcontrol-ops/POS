@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone, timedelta
 
+from core import daily_rollup
 from core.delivery import POS_SOURCE
 from core.pos_provider import PosProvider
 from storage.firestore_store import Store
@@ -172,6 +173,12 @@ def _apply(store: Store, store_id: str, receipts: list[dict],
     # out on a first sync of several thousand.
     if sales_rows:
         store.save_sales_bulk(store_id, sales_rows)
+        # A bill that arrives late belongs to a day that may already be
+        # summarised. Throwing that day away is the whole correction: it
+        # is rebuilt from the bills the next time anyone looks.
+        daily_rollup.invalidate_for_sales(
+            store, store_id, [row for _, row in sales_rows],
+            datetime.now(timezone.utc).isoformat())
     if deductions:
         store.deduct_stock_bulk(store_id, deductions)
     # Marked last, always: a crash before this point leaves the receipts

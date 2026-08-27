@@ -137,6 +137,11 @@ export const api = {
       { method: 'DELETE' }),
 
   getMe: () => request('/api/me'),
+  setTimezone: (offsetMinutes) =>
+    request('/api/settings/timezone', {
+      method: 'POST',
+      body: JSON.stringify({ offset_minutes: offsetMinutes }),
+    }),
   listUsers: () => request('/api/users'),
   /**
    * Invites go through the body, not the query string. An invite token is
@@ -299,8 +304,6 @@ export const api = {
     request(`/api/settings/sync-interval?seconds=${seconds}`, { method: 'POST' }),
 
   sync: (storeId) => request(`/api/${storeId}/sync`, { method: 'POST' }),
-  resetSyncCursor: (storeId) =>
-    request(`/api/${storeId}/sync/reset-cursor`, { method: 'POST' }),
   resetSyncCursor: (storeId) =>
     request(`/api/${storeId}/sync/reset-cursor`, { method: 'POST' }),
 };
