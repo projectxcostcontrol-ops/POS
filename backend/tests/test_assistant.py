@@ -278,6 +278,10 @@ def test_the_port_holds_its_shape():
           "ห้ามคิดเลขเอง" in assistant.INSTRUCTIONS, True)
     check("and require the caveats to be volunteered",
           "caveats" in assistant.INSTRUCTIONS, True)
+    check("the model is explicitly read-only",
+          "อ่านอย่างเดียว" in assistant.INSTRUCTIONS, True)
+    check("and may not claim it changed shop data",
+          "ห้ามอ้างว่าได้แก้ไข" in assistant.INSTRUCTIONS, True)
 
 
 class Answering(AssistantProvider):
@@ -366,6 +370,21 @@ def test_an_answer_comes_back_with_what_could_not_be_checked():
           sent.calls[0][2], "เดือนนี้เป็นไง")
     check("and the data is the context, not the raw bills",
           sorted(sent.calls[0][1]), ["period", "series"])
+
+    followup = Answering("ยอดขาย 1,400 บาท ครับ")
+    continued = assistant.answer(
+        followup, ctx, "แล้วเมนูนั้นล่ะ",
+        previous_questions=["เมนูไหนขายดีที่สุด", "กำไร 88,000 บาทจริงไหม"])
+    check("a follow-up carries only previous questions",
+          followup.calls[0][1]["conversation"]["previous_questions_only"],
+          ["เมนูไหนขายดีที่สุด", "กำไร 88,000 บาทจริงไหม"])
+    check("history is a copy and does not contaminate the shop facts",
+          "conversation" in ctx, False)
+    check("a number typed in history is not authorised as a shop fact",
+          assistant.answer(Answering("กำไร 88,000 บาท"), ctx, "จริงไหม",
+                           previous_questions=["กำไร 88,000 บาทจริงไหม"])
+          ["unverified_numbers"], [88000.0])
+    check("the continued answer still succeeds", continued["ok"], True)
 
 
 def test_a_business_cannot_ask_forever():

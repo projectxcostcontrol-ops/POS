@@ -56,6 +56,8 @@ INSTRUCTIONS = """คุณคือผู้ช่วยของร้าน�
 3. ถ้าใน caveats มีข้อไหนที่เกี่ยวกับสิ่งที่ถูกถาม **ต้องพูดถึงด้วยเสมอ**
    ตัวเลขที่ไม่ครบแล้วไม่บอกว่าไม่ครบ คือตัวเลขที่หลอกคนอ่าน
 4. ห้ามแนะนำให้ทำอะไรที่ระบบทำไม่ได้ หรืออ้างว่ามีปุ่ม/หน้าจอที่ไม่ได้บอกไว้
+5. คุณเป็นผู้วิเคราะห์แบบอ่านอย่างเดียว ห้ามอ้างว่าได้แก้ไข บันทึก ลบ หรืออนุมัติ
+   ข้อมูลใดในระบบแล้ว ถ้าผู้ใช้ขอให้แก้ ให้บอกว่าทำไม่ได้และแนะนำหน้าที่ผู้ใช้ตรวจเอง
 
 วิธีตอบ:
 - สั้น ตรงคำถาม เหมือนคุยกัน ไม่ใช่รายงาน
@@ -119,6 +121,8 @@ def build_snapshot(*, branch: str, rollups: list[dict], recipes: dict,
             "distinct_sold": len({n for r in rollups
                                   for n in (r.get("items") or {})}),
             "top": _top_menus(rollups, total),
+            "performance": daily_rollup.menu_performance(
+                rollups, recipes, materials, limit=20),
         },
         "cost": {
             "ingredient_cost_by_recipe": summary["ingredient_cost"],
@@ -369,7 +373,8 @@ def compare_snapshots(current: dict, previous: dict) -> dict:
     }
 
 
-def answer(provider, context: dict, question: str) -> dict:
+def answer(provider, context: dict, question: str,
+           previous_questions: list[str] | None = None) -> dict:
     """Ask one question and report what came back, with its warnings.
 
     Never raises for a provider failure: the caller has a screen to
@@ -384,10 +389,23 @@ def answer(provider, context: dict, question: str) -> dict:
                 "error": f"คำถามยาวเกินไป (เกิน {MAX_QUESTION_LENGTH} ตัวอักษร)"}
 
     try:
-        text = provider.ask(INSTRUCTIONS, context, question)
+        # Previous questions help resolve follow-ups such as "แล้วเมนูนั้นล่ะ".
+        # Old answers are excluded: an unverified number from an old answer
+        # must never become an allowed input on the next turn.
+        model_context = context
+        history = [str(q).strip()[:MAX_QUESTION_LENGTH]
+                   for q in (previous_questions or [])[-4:] if str(q).strip()]
+        if history:
+            model_context = {**context, "conversation": {
+                "previous_questions_only": history,
+                "note": "ใช้เพื่อเข้าใจคำถามต่อเนื่องเท่านั้น ไม่ใช่ข้อมูลตัวเลขของร้าน",
+            }}
+        text = provider.ask(INSTRUCTIONS, model_context, question)
     except Exception as e:
         return {"ok": False, "error": str(e) or "ผู้ช่วยตอบไม่ได้ตอนนี้"}
 
+    # Verify against shop facts only, never against numbers a person may have
+    # typed in a previous question.
     unsupported = verify_numbers(text, context)
     return {
         "ok": True,

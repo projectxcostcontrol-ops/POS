@@ -229,6 +229,27 @@ def test_a_corrected_price_moves_the_past_on_its_own():
           rollups == list(roll.build_many(SALES, BKK).values()), True)
 
 
+def test_menu_performance_never_calls_missing_cost_profit():
+    section("Profit per menu is computed, and missing cost stays missing")
+    rollups = list(roll.build_many(SALES, BKK).values())
+    rows = {row["name"]: row for row in
+            roll.menu_performance(rollups, RECIPES, MATERIALS)}
+
+    rice = rows["ข้าวผัด"]
+    check("recipe unit cost is precomputed", rice["unit_cost"], 13.0)
+    check("menu ingredient cost is quantity times unit cost",
+          rice["ingredient_cost"], round(rice["qty"] * 13, 2))
+    check("gross profit is precomputed", rice["gross_profit"],
+          round(rice["revenue"] - rice["ingredient_cost"], 2))
+    check("margin is precomputed", rice["gross_margin_pct"],
+          round(rice["gross_profit"] / rice["revenue"] * 100, 1))
+
+    water = rows["น้ำเปล่า"]
+    check("an uncosted menu is named as uncosted", water["costed"], False)
+    check("its unknown cost is not silently zero", water["ingredient_cost"], None)
+    check("and its unknown profit is not promoted", water["gross_profit"], None)
+
+
 def test_the_list_and_the_chart_agree():
     section("The list and the chart agree")
 

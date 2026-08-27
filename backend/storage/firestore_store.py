@@ -1005,6 +1005,29 @@ class Store:
         self._tenant_doc().collection("assistant_usage").document(day).set(
             {"asks": self.increment(1), "date": day}, merge=True)
 
+    # ---- owner-controlled follow-up to assistant recommendations ------
+    # These records do not grant the assistant a write capability. They are
+    # created and changed only after an authenticated person clicks.
+
+    def add_advice_tracking(self, store_id: str, record: dict) -> dict:
+        _, ref = self._col(store_id, "advice_tracking").add(record)
+        return {**record, "id": ref.id}
+
+    def get_advice_tracking(self, store_id: str, tracking_id: str) -> dict | None:
+        doc = self._col(store_id, "advice_tracking").document(tracking_id).get()
+        return (doc.to_dict() | {"id": doc.id}) if doc.exists else None
+
+    def list_advice_tracking(self, store_id: str) -> list[dict]:
+        rows = [doc.to_dict() | {"id": doc.id}
+                for doc in self._col(store_id, "advice_tracking").stream()]
+        return sorted(rows, key=lambda row: row.get("created_at") or "", reverse=True)
+
+    def update_advice_tracking(self, store_id: str, tracking_id: str, data: dict):
+        allowed = {"status", "note", "updated_at", "evaluation", "evaluated_at"}
+        clean = {key: value for key, value in data.items() if key in allowed}
+        self._col(store_id, "advice_tracking").document(tracking_id).set(
+            clean, merge=True)
+
     def get_brief(self, store_id: str, day: str) -> dict | None:
         doc = self._col(store_id, "daily_briefs").document(day).get()
         return doc.to_dict() if doc.exists else None

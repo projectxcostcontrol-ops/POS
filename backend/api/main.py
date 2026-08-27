@@ -35,6 +35,7 @@ from core import sales_report
 from core import daily_rollup
 from core import daily_brief
 from core import assistant as assistant_lib
+from core import advisor as advisor_lib
 from core.expenses import clean_expense, ExpenseError
 from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
@@ -1375,18 +1376,8 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
         raise HTTPException(
             429, f"วันนี้ถามครบ {ASSISTANT_DAILY_LIMIT} คำถามแล้ว พรุ่งนี้ถามต่อได้")
 
-    first, last = _ask_window(data, today)
-    span = daily_rollup.days_between(first, last)
-    if not span:
-        raise HTTPException(400, "ช่วงวันที่ไม่ถูกต้อง")
-    # A year is 365 rows, and the period before it is 365 more. Past that
-    # the question is not one anybody typed on purpose - a date field
-    # left at its minimum, or a mis-keyed year - and it would quietly
-    # cost more than a month of ordinary use.
-    if len(span) > MAX_ASK_DAYS:
-        raise HTTPException(
-            400, f"ช่วงที่ถามยาวเกิน {MAX_ASK_DAYS} วัน - เลือกช่วงให้แคบลง")
-
+    first, last, span = _validated_assistant_window(
+        data.get("from"), data.get("to"), today)
     # Fetched once and shared by both periods. The recipe book and the
     # material list are the same whichever window is being summarised,
     # and they are a collection read each.
@@ -1406,7 +1397,11 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
         current=current, previous=_trim_previous(previous),
         series=daily_rollup.breakdown(rollups))
 
-    result = assistant_lib.answer(provider, context, data.get("question", ""))
+    history = data.get("previous_questions") or []
+    if not isinstance(history, list):
+        raise HTTPException(400, "ประวัติคำถามไม่ถูกต้อง")
+    result = assistant_lib.answer(provider, context, data.get("question", ""),
+                                  previous_questions=history)
     if result["ok"]:
         # Counted only when a question actually reached the provider. A
         # refused empty box should not cost anyone their allowance.
@@ -1418,11 +1413,153 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
             "caveats": current.get("caveats", [])}
 
 
-def _ask_window(data: dict, today: str) -> tuple[str, str]:
-    """The days a question is about. Defaults to this month so far."""
-    last = (data.get("to") or "")[:10] or today
-    first = (data.get("from") or "")[:10] or f"{today[:7]}-01"
-    return first, last
+@app.get("/api/{store_id}/assistant/insights")
+def assistant_insights(store_id: str, from_: str = "", to: str = "",
+                       c: Ctx = Depends(store_money)):
+    """Top actions computed from shop data, with no model or business-data write.
+
+    The response can only contain navigation actions from advisor.READ_ONLY_ROUTES.
+    Nothing in this path accepts an update payload or has access to a mutation
+    callback, which keeps recommendations separate from business operations.
+    The reporting layer may still refresh its derived daily cache; it cannot
+    alter source sales, stock, recipes, purchases, or expenses.
+    """
+    tz = c.tz_offset
+    today = daily_rollup.local_day(_now(), tz)
+    first, last, span = _validated_assistant_window(from_, to, today)
+    recipes = c.store.all_recipes(store_id)
+    materials = c.store.list_materials(store_id)
+    current, _ = _period_snapshot(c, store_id, first, last, tz, today,
+                                  recipes, materials)
+    prev_last = _shift_day(first, -1)
+    prev_first = _shift_day(prev_last, -(len(span) - 1))
+    previous, _ = _period_snapshot(c, store_id, prev_first, prev_last, tz, today,
+                                   recipes, materials)
+    previous_trimmed = _trim_previous(previous)
+    return {
+        "from": first,
+        "to": last,
+        "recommendations": advisor_lib.build_recommendations(
+            current, previous_trimmed, limit=3),
+        "analysis": advisor_lib.build_deep_analysis(current, previous_trimmed),
+        "read_only": True,
+    }
+
+
+@app.get("/api/{store_id}/assistant/tracking")
+def list_assistant_tracking(store_id: str, c: Ctx = Depends(store_money)):
+    return c.store.list_advice_tracking(store_id)
+
+
+@app.post("/api/{store_id}/assistant/tracking")
+def create_assistant_tracking(store_id: str, data: dict,
+                              c: Ctx = Depends(store_money)):
+    """A person, not the assistant, chooses to save one visible recommendation."""
+    tz = c.tz_offset
+    today = daily_rollup.local_day(_now(), tz)
+    first, last, span = _validated_assistant_window(
+        data.get("from"), data.get("to"), today)
+    if last >= today:
+        raise HTTPException(400, "การเก็บค่าก่อนเริ่มต้องเลือกช่วงที่ขายจบแล้ว ไม่รวมวันนี้")
+    recipes = c.store.all_recipes(store_id)
+    materials = c.store.list_materials(store_id)
+    current, _ = _period_snapshot(c, store_id, first, last, tz, today,
+                                  recipes, materials)
+    prev_last = _shift_day(first, -1)
+    prev_first = _shift_day(prev_last, -(len(span) - 1))
+    previous, _ = _period_snapshot(c, store_id, prev_first, prev_last, tz, today,
+                                   recipes, materials)
+    visible = advisor_lib.build_recommendations(
+        current, _trim_previous(previous), limit=3)
+    recommendation = next((row for row in visible
+                           if row.get("id") == data.get("recommendation_id")), None)
+    if not recommendation:
+        raise HTTPException(400, "คำแนะนำนี้ไม่ได้อยู่ในรายการปัจจุบันแล้ว")
+    already_active = any(
+        row.get("recommendation", {}).get("id") == recommendation["id"]
+        and row.get("status") not in {"completed", "cancelled"}
+        for row in c.store.list_advice_tracking(store_id))
+    if already_active:
+        raise HTTPException(409, "คำแนะนำนี้อยู่ในแผนติดตามแล้ว")
+    note = str(data.get("note") or "").strip()[:300]
+    now = _now()
+    return c.store.add_advice_tracking(store_id, {
+        "recommendation": recommendation,
+        "baseline": advisor_lib.tracking_baseline(current, recommendation),
+        "status": "planned",
+        "note": note,
+        "created_at": now,
+        "updated_at": now,
+        "created_by": c.user["uid"],
+    })
+
+
+@app.patch("/api/{store_id}/assistant/tracking/{tracking_id}")
+def update_assistant_tracking(store_id: str, tracking_id: str, data: dict,
+                              c: Ctx = Depends(store_money)):
+    record = c.store.get_advice_tracking(store_id, tracking_id)
+    if not record:
+        raise HTTPException(404, "ไม่พบแผนติดตามนี้")
+    status = data.get("status", record.get("status"))
+    if status not in {"planned", "in_progress", "cancelled"}:
+        raise HTTPException(400, "สถานะไม่ถูกต้อง — การจบแผนต้องกดวัดผล")
+    update = {"status": status, "updated_at": _now()}
+    if "note" in data:
+        update["note"] = str(data.get("note") or "").strip()[:300]
+    c.store.update_advice_tracking(store_id, tracking_id, update)
+    return {**record, **update}
+
+
+@app.post("/api/{store_id}/assistant/tracking/{tracking_id}/evaluate")
+def evaluate_assistant_tracking(store_id: str, tracking_id: str, data: dict,
+                                c: Ctx = Depends(store_money)):
+    record = c.store.get_advice_tracking(store_id, tracking_id)
+    if not record:
+        raise HTTPException(404, "ไม่พบแผนติดตามนี้")
+    tz = c.tz_offset
+    today = daily_rollup.local_day(_now(), tz)
+    first, last, span = _validated_assistant_window(
+        data.get("from"), data.get("to"), today)
+    if last >= today:
+        raise HTTPException(400, "ช่วงวัดผลต้องเป็นวันที่ขายจบแล้ว ไม่รวมวันนี้")
+    baseline_period = record.get("baseline", {}).get("period", {})
+    baseline_days = int(baseline_period.get("days") or 0)
+    if first <= (baseline_period.get("to") or ""):
+        raise HTTPException(400, "ช่วงวัดผลต้องเริ่มหลังช่วงข้อมูลก่อนทำแผน")
+    if baseline_days and len(span) != baseline_days:
+        raise HTTPException(400, "ช่วงก่อนและหลังต้องมีจำนวนวันเท่ากันเพื่อเปรียบเทียบได้")
+    current, _ = _period_snapshot(
+        c, store_id, first, last, tz, today,
+        c.store.all_recipes(store_id), c.store.list_materials(store_id))
+    evaluation = {
+        "period": current["period"],
+        **advisor_lib.measure_outcome(record.get("baseline") or {}, current),
+    }
+    now = _now()
+    update = {"status": "completed", "evaluation": evaluation,
+              "evaluated_at": now, "updated_at": now}
+    c.store.update_advice_tracking(store_id, tracking_id, update)
+    return {**record, **update}
+
+
+def _validated_assistant_window(first_value: str | None,
+                                last_value: str | None,
+                                today: str) -> tuple[str, str, list[str]]:
+    """Validate before touching rollups so malformed/future dates cannot write cache."""
+    first = (first_value or "")[:10] or f"{today[:7]}-01"
+    last = (last_value or "")[:10] or today
+    try:
+        span = daily_rollup.days_between(first, last)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "รูปแบบวันที่ไม่ถูกต้อง")
+    if not span:
+        raise HTTPException(400, "ช่วงวันที่ไม่ถูกต้อง")
+    if last > today:
+        raise HTTPException(400, "ยังวิเคราะห์วันที่ในอนาคตไม่ได้")
+    if len(span) > MAX_ASK_DAYS:
+        raise HTTPException(
+            400, f"ช่วงที่ถามยาวเกิน {MAX_ASK_DAYS} วัน - เลือกช่วงให้แคบลง")
+    return first, last, span
 
 
 def _period_snapshot(c: Ctx, store_id: str, first: str, last: str, tz: int,

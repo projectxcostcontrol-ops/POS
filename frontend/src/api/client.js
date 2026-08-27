@@ -228,10 +228,27 @@ export const api = {
   getDailySales: (storeId, from, to) =>
     request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}`),
-  askAssistant: (storeId, question, from, to) =>
+  askAssistant: (storeId, question, from, to, previousQuestions = []) =>
     request(`/api/${storeId}/assistant/ask`, {
       method: 'POST',
-      body: JSON.stringify({ question, from, to }),
+      body: JSON.stringify({ question, from, to, previous_questions: previousQuestions.slice(-4) }),
+    }),
+  getAssistantInsights: (storeId, from, to) =>
+    request(`/api/${storeId}/assistant/insights?from_=${encodeURIComponent(from)}` +
+      `&to=${encodeURIComponent(to)}`),
+  getAssistantTracking: (storeId) =>
+    request(`/api/${storeId}/assistant/tracking`),
+  createAssistantTracking: (storeId, recommendationId, from, to) =>
+    request(`/api/${storeId}/assistant/tracking`, {
+      method: 'POST', body: JSON.stringify({ recommendation_id: recommendationId, from, to }),
+    }),
+  updateAssistantTracking: (storeId, trackingId, status) =>
+    request(`/api/${storeId}/assistant/tracking/${trackingId}`, {
+      method: 'PATCH', body: JSON.stringify({ status }),
+    }),
+  evaluateAssistantTracking: (storeId, trackingId, from, to) =>
+    request(`/api/${storeId}/assistant/tracking/${trackingId}/evaluate`, {
+      method: 'POST', body: JSON.stringify({ from, to }),
     }),
   getBrief: (storeId, date) =>
     request(`/api/${storeId}/brief${date ? `?date=${date}` : ''}`),

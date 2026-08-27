@@ -1,7 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/StoreContext';
 import { api } from '../api/client';
-import { PaperPlaneRight, WarningCircle } from '@phosphor-icons/react';
+import {
+  ArrowRight, BookmarkSimple, CheckCircle, LockKey, PaperPlaneRight,
+  Play, WarningCircle, X,
+} from '@phosphor-icons/react';
 
 /**
  * Asking a question about the shop's own figures.
@@ -36,13 +40,104 @@ function thisMonth() {
   };
 }
 
+const TODAY = thisMonth().to;
+
 export default function Assistant() {
-  const { storeId } = useStore();
+  const { storeId, stores } = useStore();
+  const navigate = useNavigate();
   const [range, setRange] = useState(thisMonth);
   const [question, setQuestion] = useState('');
   const [result, setResult] = useState(null);
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState('');
+  const [previousQuestions, setPreviousQuestions] = useState([]);
+  const [insights, setInsights] = useState([]);
+  const [analysis, setAnalysis] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightsError, setInsightsError] = useState('');
+  const [tracking, setTracking] = useState([]);
+  const [trackingError, setTrackingError] = useState('');
+  const [trackingBusy, setTrackingBusy] = useState('');
+  const activeStore = useMemo(
+    () => stores.find((store) => store.id === storeId), [stores, storeId]);
+
+  useEffect(() => {
+    if (!storeId || !range.from || !range.to) return undefined;
+    let active = true;
+    setPreviousQuestions([]);
+    setResult(null);
+    setInsightsLoading(true);
+    setInsightsError('');
+    api.getAssistantInsights(storeId, range.from, range.to)
+      .then((response) => {
+        if (active) {
+          setInsights(response.recommendations || []);
+          setAnalysis(response.analysis || null);
+        }
+      })
+      .catch((e) => {
+        if (active) {
+          setInsights([]);
+          setAnalysis(null);
+          setInsightsError(e.message);
+        }
+      })
+      .finally(() => { if (active) setInsightsLoading(false); });
+    return () => { active = false; };
+  }, [storeId, range.from, range.to]);
+
+  useEffect(() => {
+    if (!storeId) return undefined;
+    let active = true;
+    api.getAssistantTracking(storeId)
+      .then((rows) => { if (active) setTracking(rows || []); })
+      .catch((e) => { if (active) setTrackingError(e.message); });
+    return () => { active = false; };
+  }, [storeId]);
+
+  async function saveTracking(recommendationId) {
+    if (trackingBusy) return;
+    setTrackingBusy(`save:${recommendationId}`);
+    setTrackingError('');
+    try {
+      const saved = await api.createAssistantTracking(
+        storeId, recommendationId, range.from, range.to);
+      setTracking((rows) => [saved, ...rows]);
+    } catch (e) {
+      setTrackingError(e.message);
+    } finally {
+      setTrackingBusy('');
+    }
+  }
+
+  async function setTrackingStatus(row, status) {
+    setTrackingBusy(row.id);
+    setTrackingError('');
+    try {
+      const updated = await api.updateAssistantTracking(storeId, row.id, status);
+      setTracking((rows) => rows.map((item) => item.id === row.id ? updated : item));
+    } catch (e) {
+      setTrackingError(e.message);
+    } finally {
+      setTrackingBusy('');
+    }
+  }
+
+  async function evaluateTracking(row) {
+    const window = nextEvaluationWindow(row.baseline?.period);
+    if (!window || trackingBusy) return;
+    setTrackingBusy(row.id);
+    setTrackingError('');
+    try {
+      const updated = await api.evaluateAssistantTracking(
+        storeId, row.id, window.from, window.to);
+      setTracking((rows) => rows.map((item) => item.id === row.id ? updated : item));
+    } catch (e) {
+      setTrackingError(e.message);
+    } finally {
+      setTrackingBusy('');
+    }
+  }
 
   async function ask(text) {
     const q = (text ?? question).trim();
@@ -51,8 +146,11 @@ export default function Assistant() {
     setError('');
     setResult(null);
     try {
-      const r = await api.askAssistant(storeId, q, range.from, range.to);
-      if (r.ok) setResult({ ...r, question: q });
+      const r = await api.askAssistant(storeId, q, range.from, range.to, previousQuestions);
+      if (r.ok) {
+        setResult({ ...r, question: q });
+        setPreviousQuestions((items) => [...items, q].slice(-4));
+      }
       else setError(r.error || 'ผู้ช่วยตอบไม่ได้ตอนนี้');
     } catch (e) {
       setError(e.message);
@@ -69,9 +167,19 @@ export default function Assistant() {
         <div>
           <h1>ถามข้อมูลร้าน</h1>
           <p className="page-subtitle">
-            ตอบจากข้อมูลในระบบเท่านั้น ไม่ได้เดา — ถ้าไม่มีข้อมูลจะบอกว่าไม่มี
+            {activeStore?.name ? `${activeStore.name} · ` : ''}
+            ตอบจากข้อมูลในระบบเท่านั้น ถ้าไม่มีข้อมูลจะบอกว่าไม่มี
           </p>
         </div>
+      </div>
+
+      <div style={privacyStyle}>
+        <LockKey size={18} style={{ flexShrink: 0 }} />
+        <span>
+          ผู้ช่วยอ่านข้อมูลได้อย่างเดียวและแก้ไขข้อมูลร้านไม่ได้ · เมื่อถาม AI ระบบจะส่งเฉพาะ
+          ข้อมูลสรุปยอดขาย ต้นทุน กำไร และชื่อเมนูไปยัง Google Gemini โดยไม่ส่งข้อมูลลูกค้า
+          พนักงาน หรือรายละเอียดบิลรายใบ
+        </span>
       </div>
 
       <div style={{
@@ -79,14 +187,160 @@ export default function Assistant() {
         marginBottom: 14, fontSize: 13,
       }}>
         <span style={{ color: 'var(--text-muted)' }}>ช่วงที่ถาม</span>
-        <input type="date" value={range.from} max={range.to}
+        <input type="date" value={range.from} max={range.to < TODAY ? range.to : TODAY}
           onChange={(e) => setRange({ ...range, from: e.target.value })}
           style={dateStyle} />
         <span style={{ color: 'var(--text-muted)' }}>ถึง</span>
-        <input type="date" value={range.to} min={range.from}
+        <input type="date" value={range.to} min={range.from} max={TODAY}
           onChange={(e) => setRange({ ...range, to: e.target.value })}
           style={dateStyle} />
       </div>
+
+      <section aria-labelledby="assistant-priorities" style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 9 }}>
+          <h2 id="assistant-priorities" style={{ margin: 0, fontSize: 17 }}>
+            ควรเริ่มตรงไหนก่อน
+          </h2>
+          <span style={{ color: 'var(--text-muted)', fontSize: 12.5 }}>
+            จากช่วงที่เลือก · ไม่แก้ข้อมูลให้อัตโนมัติ
+          </span>
+        </div>
+        <div aria-live="polite">
+          {insightsLoading && <p style={mutedStyle}>กำลังวิเคราะห์ข้อมูล...</p>}
+          {insightsError && <p role="alert" style={errorStyle}>{insightsError}</p>}
+          {!insightsLoading && !insightsError && insights.length === 0 && (
+            <p style={mutedStyle}>ยังไม่มีข้อมูลพอสำหรับจัดลำดับคำแนะนำในช่วงนี้</p>
+          )}
+          {insights.length > 0 && (
+            <div style={insightGridStyle}>
+              {insights.map((item, index) => (
+                <article key={item.id} style={insightCardStyle}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={rankStyle}>อันดับ {index + 1} · {item.category}</span>
+                    <span style={confidenceStyle}>มั่นใจ{item.confidence}</span>
+                  </div>
+                  <h3 style={{ margin: '9px 0 5px', fontSize: 15 }}>{item.title}</h3>
+                  <p style={{ margin: 0, fontSize: 13, lineHeight: 1.55 }}>{item.reason}</p>
+                  <p style={{ margin: '8px 0 0', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+                    หลักฐาน: {item.evidence}
+                  </p>
+                  <p style={{ margin: '5px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                    ข้อจำกัด: {item.limitation}
+                  </p>
+                  <button type="button" onClick={() => navigate(item.action.path)} style={actionStyle}>
+                    {item.action.label}<ArrowRight size={14} />
+                  </button>
+                  <button type="button" onClick={() => saveTracking(item.id)}
+                    disabled={trackingBusy !== '' || tracking.some((row) =>
+                      row.recommendation?.id === item.id && row.status !== 'cancelled')}
+                    style={{ ...actionStyle, marginLeft: 14 }}>
+                    <BookmarkSimple size={14} />
+                    {trackingBusy === `save:${item.id}`
+                      ? 'กำลังเก็บ...'
+                      : tracking.some((row) => row.recommendation?.id === item.id
+                        && row.status !== 'cancelled')
+                        ? 'อยู่ในแผนแล้ว' : 'เก็บเป็นแผนติดตาม'}
+                  </button>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {analysis && (
+        <section aria-labelledby="deep-analysis" style={{ marginBottom: 22 }}>
+          <h2 id="deep-analysis" style={{ margin: '0 0 9px', fontSize: 17 }}>
+            วิเคราะห์เชิงลึก
+          </h2>
+
+          {analysis.period_changes && (
+            <div style={changeGridStyle}>
+              <ChangeCard label="ยอดขาย"
+                value={analysis.period_changes.sales_baht} />
+              <ChangeCard label="ต้นทุนตามสูตร"
+                value={analysis.period_changes.ingredient_cost_baht} favorable="down" />
+              <ChangeCard label="ยอดซื้อวัตถุดิบ"
+                value={analysis.period_changes.purchases_baht} favorable="down" />
+              <ChangeCard label="กำไรสุทธิ"
+                value={analysis.period_changes.net_profit_baht} />
+            </div>
+          )}
+
+          {analysis.signals?.length > 0 && (
+            <div style={{ display: 'grid', gap: 7, margin: '10px 0' }}>
+              {analysis.signals.map((signal) => (
+                <div key={signal.kind} style={signalStyle}>
+                  <WarningCircle size={17} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span><strong>{signal.title}</strong><br />{signal.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {analysis.menus?.lowest_margin?.length > 0 && (
+            <div style={tableCardStyle}>
+              <div style={{ padding: '12px 14px 8px' }}>
+                <h3 style={{ margin: 0, fontSize: 15 }}>กำไรขั้นต้นรายเมนูที่ควรตรวจ</h3>
+                <p style={{ margin: '3px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                  เรียงจากอัตรากำไรต่ำสุด · {analysis.method}
+                </p>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={analysisTableStyle}>
+                  <thead><tr>
+                    <th>เมนู</th><th>ขาย</th><th>ยอดขาย</th><th>ต้นทุน/จาน</th>
+                    <th>กำไรขั้นต้น</th><th>อัตรากำไร</th><th>ยอดขายเทียบช่วงก่อน</th>
+                  </tr></thead>
+                  <tbody>
+                    {analysis.menus.lowest_margin.map((menu) => (
+                      <tr key={menu.name}>
+                        <td style={{ fontWeight: 600 }}>{menu.name}</td>
+                        <td>{formatNumber(menu.qty)}</td>
+                        <td>{formatBaht(menu.revenue)}</td>
+                        <td>{formatBaht(menu.unit_cost)}</td>
+                        <td>{formatBaht(menu.gross_profit)}</td>
+                        <td>{formatNumber(menu.gross_margin_pct)}%</td>
+                        <td style={changeColor(menu.revenue_change_baht)}>
+                          {menu.revenue_change_baht == null
+                            ? 'ไม่มีข้อมูลเทียบ'
+                            : `${formatChange(menu.revenue_change_baht)} บาท`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {analysis.menus.uncosted?.length > 0 && (
+                <p style={{ margin: 0, padding: '9px 14px 12px', fontSize: 12,
+                  color: 'var(--text-warning)' }}>
+                  ยังไม่รวมกำไรของ: {analysis.menus.uncosted.slice(0, 6).join(', ')}
+                </p>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      <section aria-labelledby="tracking-title" style={{ marginBottom: 22 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 9 }}>
+          <h2 id="tracking-title" style={{ margin: 0, fontSize: 17 }}>แผนที่กำลังติดตาม</h2>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            คุณเป็นผู้เริ่ม เปลี่ยนสถานะ และวัดผลเอง
+          </span>
+        </div>
+        {trackingError && <p role="alert" style={errorStyle}>{trackingError}</p>}
+        {tracking.length === 0 ? (
+          <p style={mutedStyle}>ยังไม่มีแผน กด “เก็บเป็นแผนติดตาม” จากคำแนะนำด้านบนได้เลย</p>
+        ) : (
+          <div style={{ display: 'grid', gap: 9 }}>
+            {tracking.map((row) => (
+              <TrackingCard key={row.id} row={row} busy={trackingBusy === row.id}
+                onStatus={setTrackingStatus} onEvaluate={evaluateTracking} />
+            ))}
+          </div>
+        )}
+      </section>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         <input
@@ -107,6 +361,11 @@ export default function Assistant() {
           {asking ? 'กำลังคิด...' : 'ถาม'}
         </button>
       </div>
+      {previousQuestions.length > 0 && (
+        <p style={{ margin: '-5px 0 10px', fontSize: 11.5, color: 'var(--text-muted)' }}>
+          ผู้ช่วยจำบริบท {previousQuestions.length} คำถามล่าสุดในหน้านี้ · ไม่บันทึกเป็นข้อมูลร้าน
+        </p>
+      )}
 
       {!result && !asking && (
         <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 18 }}>
@@ -121,11 +380,11 @@ export default function Assistant() {
       )}
 
       {error && (
-        <p style={{ fontSize: 13, color: 'var(--text-danger)' }}>{error}</p>
+        <p role="alert" style={errorStyle}>{error}</p>
       )}
 
       {result && (
-        <div style={{
+        <div aria-live="polite" style={{
           background: 'var(--surface-2)', border: '1px solid var(--border)',
           borderRadius: 10, padding: '14px 16px',
         }}>
@@ -187,3 +446,166 @@ const dateStyle = {
   fontSize: 13, padding: '7px 9px', borderRadius: 8,
   background: 'var(--surface-1)', border: '1px solid var(--border)',
 };
+
+const privacyStyle = {
+  display: 'flex', gap: 9, alignItems: 'flex-start', margin: '-3px 0 16px',
+  padding: '10px 12px', borderRadius: 10, fontSize: 12.5, lineHeight: 1.5,
+  color: 'var(--text-secondary)', background: 'var(--surface-2)',
+  border: '1px solid var(--border)',
+};
+const insightGridStyle = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 10,
+};
+const insightCardStyle = {
+  border: '1px solid var(--border)', borderRadius: 12, padding: '13px 14px',
+  background: 'var(--surface-1)',
+};
+const rankStyle = { fontSize: 11.5, color: 'var(--accent)', fontWeight: 700 };
+const confidenceStyle = {
+  fontSize: 10.5, color: 'var(--text-secondary)', background: 'var(--surface-2)',
+  padding: '2px 7px', borderRadius: 999,
+};
+const actionStyle = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 10, padding: 0,
+  border: 0, background: 'transparent', color: 'var(--accent)', fontSize: 12.5,
+  fontWeight: 600, cursor: 'pointer',
+};
+const mutedStyle = { margin: 0, fontSize: 13, color: 'var(--text-muted)' };
+const errorStyle = { fontSize: 13, color: 'var(--text-danger)' };
+const changeGridStyle = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8,
+};
+const changeCardStyle = {
+  border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px',
+  background: 'var(--surface-1)',
+};
+const signalStyle = {
+  display: 'flex', gap: 8, alignItems: 'flex-start', padding: '9px 11px',
+  borderRadius: 9, fontSize: 12.5, lineHeight: 1.45,
+  color: 'var(--text-secondary)', background: 'var(--surface-2)',
+};
+const tableCardStyle = {
+  border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden',
+  background: 'var(--surface-1)', marginTop: 10,
+};
+const analysisTableStyle = {
+  width: '100%', minWidth: 720, borderCollapse: 'collapse', fontSize: 12.5,
+};
+
+function ChangeCard({ label, value, favorable = 'up' }) {
+  return (
+    <div style={changeCardStyle}>
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--text-muted)' }}>{label}</p>
+      <p style={{ margin: '4px 0 0', fontSize: 14, fontWeight: 700,
+        ...changeColor(value.change, favorable) }}>
+        {formatChange(value.change)} บาท
+      </p>
+      <p style={{ margin: '2px 0 0', fontSize: 10.5, color: 'var(--text-muted)' }}>
+        ช่วงนี้ {formatBaht(value.current)} · ก่อนหน้า {formatBaht(value.previous)}
+      </p>
+    </div>
+  );
+}
+
+function formatBaht(value) {
+  return `${Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 })} บาท`;
+}
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString('th-TH', { maximumFractionDigits: 1 });
+}
+function formatChange(value) {
+  if (value == null) return 'ไม่มีข้อมูลเทียบ';
+  const number = Number(value);
+  return `${number > 0 ? '+' : ''}${number.toLocaleString('th-TH', { maximumFractionDigits: 2 })}`;
+}
+function changeColor(value, favorable = 'up') {
+  if (value == null || Number(value) === 0) return { color: 'var(--text-muted)' };
+  const good = favorable === 'up' ? Number(value) > 0 : Number(value) < 0;
+  return { color: good ? 'var(--success)' : 'var(--text-danger)' };
+}
+
+const STATUS_LABEL = {
+  planned: 'วางแผนไว้', in_progress: 'กำลังทดลอง',
+  completed: 'วัดผลแล้ว', cancelled: 'ยกเลิก',
+};
+
+function TrackingCard({ row, busy, onStatus, onEvaluate }) {
+  const evaluationWindow = nextEvaluationWindow(row.baseline?.period);
+  const result = row.evaluation?.metrics;
+  return (
+    <article style={trackingCardStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10,
+        alignItems: 'flex-start' }}>
+        <div>
+          <span style={rankStyle}>{STATUS_LABEL[row.status] || row.status}</span>
+          <h3 style={{ margin: '4px 0', fontSize: 14.5 }}>{row.recommendation?.title}</h3>
+          <p style={{ margin: 0, fontSize: 11.5, color: 'var(--text-muted)' }}>
+            ข้อมูลก่อนเริ่ม {row.baseline?.period?.from} ถึง {row.baseline?.period?.to}
+          </p>
+        </div>
+      </div>
+
+      {result && (
+        <div style={trackingResultStyle}>
+          <span>ยอดขาย {formatChange(result.sales_baht.change)} บาท</span>
+          <span>ยอดซื้อ {formatChange(result.purchases_baht.change)} บาท</span>
+          <span>กำไรสุทธิ {formatChange(result.net_profit_baht.change)} บาท</span>
+          <small style={{ gridColumn: '1 / -1', color: 'var(--text-muted)' }}>
+            {row.evaluation.interpretation}
+          </small>
+        </div>
+      )}
+
+      {row.status !== 'completed' && row.status !== 'cancelled' && (
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 10 }}>
+          {row.status === 'planned' && (
+            <button className="button-secondary" disabled={busy}
+              onClick={() => onStatus(row, 'in_progress')}>
+              <Play size={15} /> เริ่มทดลอง
+            </button>
+          )}
+          {row.status === 'in_progress' && evaluationWindow && (
+            <button className="button-primary" disabled={busy}
+              onClick={() => onEvaluate(row)}>
+              <CheckCircle size={15} /> วัดผลช่วงถัดไป
+            </button>
+          )}
+          {row.status === 'in_progress' && !evaluationWindow && (
+            <span style={{ fontSize: 11.5, color: 'var(--text-muted)', alignSelf: 'center' }}>
+              รอให้ครบช่วงเวลาเท่ากับข้อมูลก่อนเริ่ม จึงจะวัดผลได้
+            </span>
+          )}
+          <button className="button-secondary" disabled={busy}
+            onClick={() => onStatus(row, 'cancelled')}>
+            <X size={15} /> ยกเลิกแผน
+          </button>
+        </div>
+      )}
+    </article>
+  );
+}
+
+const trackingCardStyle = {
+  padding: '12px 14px', borderRadius: 11, border: '1px solid var(--border)',
+  background: 'var(--surface-1)',
+};
+const trackingResultStyle = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+  gap: 7, marginTop: 10, padding: '9px 10px', borderRadius: 8,
+  background: 'var(--surface-2)', fontSize: 12.5,
+};
+
+function nextEvaluationWindow(period) {
+  if (!period?.to || !period?.days) return null;
+  const start = addDays(period.to, 1);
+  const end = addDays(start, Number(period.days) - 1);
+  if (end >= TODAY) return null;
+  return { from: start, to: end };
+}
+
+function addDays(day, amount) {
+  const date = new Date(`${day}T12:00:00`);
+  date.setDate(date.getDate() + amount);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}

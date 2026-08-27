@@ -187,6 +187,54 @@ def top_items(rollups: list[dict], limit: int = 5) -> list[dict]:
     return rows if limit <= 0 else rows[:limit]
 
 
+def menu_performance(rollups: list[dict], recipes: dict,
+                     materials: list[dict], limit: int = 20) -> list[dict]:
+    """Revenue and recipe cost per menu, calculated without model arithmetic.
+
+    Uncosted menus remain in the list with ``costed=False`` and no profit or
+    margin.  Treating their cost as zero would make them look like the shop's
+    most profitable dishes, which is exactly the wrong incentive.
+    """
+    costs = {m["id"]: float(m.get("cost") or 0) for m in materials}
+    rows = top_items(rollups, limit=0)
+    total_revenue = sum(float(row.get("revenue") or 0) for row in rows)
+    result = []
+    for row in rows:
+        name = row["name"]
+        qty = float(row.get("qty") or 0)
+        revenue = float(row.get("revenue") or 0)
+        recipe = recipes.get(name) or []
+        base = {
+            "name": name,
+            "qty": qty,
+            "revenue": round(revenue, 2),
+            "average_price": round(revenue / qty, 2) if qty else 0.0,
+            "share_of_sales_pct": round(revenue / total_revenue * 100, 1)
+            if total_revenue else 0.0,
+        }
+        if not recipe:
+            result.append({**base, "costed": False, "unit_cost": None,
+                           "ingredient_cost": None, "gross_profit": None,
+                           "gross_margin_pct": None})
+            continue
+        unit_cost = sum(float(ing.get("qty") or 0)
+                        * costs.get(ing.get("material_id"), 0)
+                        for ing in recipe)
+        ingredient_cost = unit_cost * qty
+        gross_profit = revenue - ingredient_cost
+        result.append({
+            **base,
+            "costed": True,
+            "unit_cost": round(unit_cost, 2),
+            "ingredient_cost": round(ingredient_cost, 2),
+            "gross_profit": round(gross_profit, 2),
+            "gross_margin_pct": round(gross_profit / revenue * 100, 1)
+            if revenue else 0.0,
+        })
+    result.sort(key=lambda item: item["revenue"], reverse=True)
+    return result if limit <= 0 else result[:limit]
+
+
 def breakdown(rollups: list[dict]) -> list[dict]:
     """Per-day totals, newest first - what the sales page lists.
 
