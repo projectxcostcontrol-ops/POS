@@ -34,6 +34,7 @@ from core import variance as variance_lib
 from core import sales_report
 from core import daily_rollup
 from core import daily_brief
+from core import assistant as assistant_lib
 from core.expenses import clean_expense, ExpenseError
 from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
@@ -1340,6 +1341,115 @@ def _days_since(iso: str | None) -> int | None:
     if then.tzinfo is None:
         then = then.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - then).days
+
+
+# How many questions one business may ask in a day. A ceiling, not a
+# meter - nobody is billed for these. It exists so a page left open in a
+# retry loop, or someone curious, cannot spend the shop's whole quota
+# before lunch.
+ASSISTANT_DAILY_LIMIT = int(os.environ.get("ASSISTANT_DAILY_LIMIT", "50"))
+
+# The longest window one question may cover, in the shop's days.
+MAX_ASK_DAYS = 400
+
+
+@app.post("/api/{store_id}/assistant/ask")
+def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
+    """One question about one branch, over a period the caller chose.
+
+    The period is a parameter rather than something the model works out
+    for itself. That is deliberate: it means the answer is about a
+    window the person can see on the screen in front of them, instead of
+    one they have to trust was picked correctly - and it keeps every
+    figure pre-computed, which is the whole design (core/assistant.py).
+    """
+    provider = _assistant()
+    if provider is None:
+        raise HTTPException(503, "ยังไม่ได้ตั้งค่า GEMINI_API_KEY - ผู้ช่วยจึงยังใช้ไม่ได้")
+
+    tz = c.tz_offset
+    today = daily_rollup.local_day(_now(), tz)
+
+    asked = c.store.assistant_asks_today(today)
+    if asked >= ASSISTANT_DAILY_LIMIT:
+        raise HTTPException(
+            429, f"วันนี้ถามครบ {ASSISTANT_DAILY_LIMIT} คำถามแล้ว พรุ่งนี้ถามต่อได้")
+
+    first, last = _ask_window(data, today)
+    span = daily_rollup.days_between(first, last)
+    if not span:
+        raise HTTPException(400, "ช่วงวันที่ไม่ถูกต้อง")
+    # A year is 365 rows, and the period before it is 365 more. Past that
+    # the question is not one anybody typed on purpose - a date field
+    # left at its minimum, or a mis-keyed year - and it would quietly
+    # cost more than a month of ordinary use.
+    if len(span) > MAX_ASK_DAYS:
+        raise HTTPException(
+            400, f"ช่วงที่ถามยาวเกิน {MAX_ASK_DAYS} วัน - เลือกช่วงให้แคบลง")
+
+    # Fetched once and shared by both periods. The recipe book and the
+    # material list are the same whichever window is being summarised,
+    # and they are a collection read each.
+    recipes = c.store.all_recipes(store_id)
+    materials = c.store.list_materials(store_id)
+
+    current, rollups = _period_snapshot(c, store_id, first, last, tz, today,
+                                        recipes, materials)
+    # The period immediately before, of the same length, so "เทียบกับช่วง
+    # ก่อนหน้า" is answerable without a second request.
+    prev_last = _shift_day(first, -1)
+    prev_first = _shift_day(prev_last, -(len(span) - 1))
+    previous, _ = _period_snapshot(c, store_id, prev_first, prev_last, tz, today,
+                                   recipes, materials)
+
+    context = assistant_lib.build_context(
+        current=current, previous=_trim_previous(previous),
+        series=daily_rollup.breakdown(rollups))
+
+    result = assistant_lib.answer(provider, context, data.get("question", ""))
+    if result["ok"]:
+        # Counted only when a question actually reached the provider. A
+        # refused empty box should not cost anyone their allowance.
+        c.store.record_assistant_ask(today)
+
+    return {**result, "from": first, "to": last,
+            "asks_today": asked + (1 if result["ok"] else 0),
+            "daily_limit": ASSISTANT_DAILY_LIMIT,
+            "caveats": current.get("caveats", [])}
+
+
+def _ask_window(data: dict, today: str) -> tuple[str, str]:
+    """The days a question is about. Defaults to this month so far."""
+    last = (data.get("to") or "")[:10] or today
+    first = (data.get("from") or "")[:10] or f"{today[:7]}-01"
+    return first, last
+
+
+def _period_snapshot(c: Ctx, store_id: str, first: str, last: str, tz: int,
+                     today: str, recipes: dict,
+                     materials: list[dict]) -> tuple[dict, list[dict]]:
+    rollups = daily_rollup.ensure_daily(c.store, store_id, first, last, tz, today)
+    snapshot = assistant_lib.build_snapshot(
+        branch=store_id,
+        rollups=rollups,
+        recipes=recipes,
+        materials=materials,
+        expenses=[e for e in c.store.list_expenses(store_id)
+                  if first <= (e.get("date") or "")[:10] <= last],
+        receivings=c.store.list_receivings(store_id, first, last),
+        period_from=first, period_to=last, today=today)
+    return snapshot, rollups
+
+
+def _trim_previous(snapshot: dict) -> dict:
+    """Last month without the parts that are not last month's.
+
+    Stock is a balance as it stands right now, and the caveats are about
+    the current period - carrying both into the previous period's block
+    would put two different "stock" figures in front of the model and
+    invite it to compare them as if one were historical.
+    """
+    return {k: v for k, v in snapshot.items() if k not in ("stock", "caveats")}
 
 
 @app.get("/api/{store_id}/sales/reconcile")

@@ -16,6 +16,7 @@ import StockCount from './pages/StockCount';
 import Receipts from './pages/Receipts';
 import DeliveryOrders from './pages/DeliveryOrders';
 import IncomeExpense from './pages/IncomeExpense';
+import Assistant from './pages/Assistant';
 import Settings from './pages/Settings';
 import Users from './pages/Users';
 import Admin from './pages/Admin';
@@ -93,6 +94,7 @@ function AppShell() {
             <Route path="/delivery-orders" element={can('view_money') ? <DeliveryOrders /> : <Navigate to={homePath} replace />} />
             <Route path="/receipts" element={can('view_money') ? <Receipts /> : <Navigate to={homePath} replace />} />
             <Route path="/income-expense" element={can('view_money') ? <IncomeExpense /> : <Navigate to={homePath} replace />} />
+            <Route path="/assistant" element={can('view_money') ? <Assistant /> : <Navigate to={homePath} replace />} />
             <Route path="/users" element={can('manage_users') ? <Users /> : <Navigate to={homePath} replace />} />
             <Route path="/settings" element={can('manage_settings') ? <Settings /> : <Navigate to={homePath} replace />} />
             <Route path="/admin" element={isAdmin ? <Admin /> : <Navigate to={homePath} replace />} />

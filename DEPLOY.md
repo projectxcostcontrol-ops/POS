@@ -54,7 +54,8 @@ Environment variables to set in the platform's dashboard:
 | `USE_FIREBASE_EMULATOR` | `false` |
 | `FIREBASE_CREDENTIALS_JSON` | the *entire* service-account JSON from step 1.5, as one value |
 | `SUPER_ADMIN_EMAILS` | your own email(s), comma-separated - see below |
-| `GEMINI_API_KEY` | for AI invoice reading (optional) |
+| `GEMINI_API_KEY` | for AI invoice reading **and the assistant** (optional) |
+| `ASSISTANT_DAILY_LIMIT` | questions per business per day (default 50) |
 | `FIREBASE_STORAGE_BUCKET` | for receipt photos (optional, see last section) |
 | `SYNC_INTERVAL_SECONDS` | optional fallback; the live value is set per business on its own Settings page |
 | `MAX_TENANTS` | how many businesses may sign up (default 10, for the closed beta) — see below |

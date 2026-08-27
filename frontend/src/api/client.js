@@ -228,6 +228,11 @@ export const api = {
   getDailySales: (storeId, from, to) =>
     request(`/api/${storeId}/sales/daily?from_=${encodeURIComponent(from)}` +
       `&to=${encodeURIComponent(to)}`),
+  askAssistant: (storeId, question, from, to) =>
+    request(`/api/${storeId}/assistant/ask`, {
+      method: 'POST',
+      body: JSON.stringify({ question, from, to }),
+    }),
   getBrief: (storeId, date) =>
     request(`/api/${storeId}/brief${date ? `?date=${date}` : ''}`),
   getAlerts: (storeId) => request(`/api/${storeId}/alerts`),

@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core import assistant
 from core import daily_rollup as roll
 from core.assistant_provider import AssistantProvider, AssistantError
+from tests.fake_firestore import make_test_store, FakeDb
 
 BKK = 420
 
@@ -279,6 +280,116 @@ def test_the_port_holds_its_shape():
           "caveats" in assistant.INSTRUCTIONS, True)
 
 
+class Answering(AssistantProvider):
+    name = "answering"
+
+    def __init__(self, text="ยอดขาย 1,400 บาท ครับ"):
+        self.text = text
+        self.calls = []
+
+    def ask(self, instructions, snapshot, question):
+        self.calls.append((instructions, snapshot, question))
+        return self.text
+
+
+class Refusing(AssistantProvider):
+    name = "refusing"
+
+    def ask(self, instructions, snapshot, question):
+        raise AssistantError("ผู้ช่วยถูกใช้งานเยอะเกินโควต้าชั่วคราว")
+
+
+def test_the_difference_between_two_periods_is_already_taken():
+    section("The difference between two periods is already taken")
+
+    now = snapshot()
+    before = snapshot(rollups=list(roll.build_many(SALES[:1], BKK).values()),
+                      receivings=[], expenses=[])
+
+    ctx = assistant.build_context(current=now, previous=before, series=[])
+    change = ctx["change"]
+
+    check("the change in takings is subtracted here, not by the model",
+          change["sales_baht"], 1400 - 600)
+    check("as a percentage too", change["sales_pct"], 133.3)
+    check("and named, so a sign cannot be read backwards",
+          change["sales_direction"], "up")
+    check("bills as well", change["bills"], 3)
+    check("and what was bought", change["purchased_baht"], 800)
+
+    check("a first period with nothing before it claims no percentage "
+          "rather than being up infinitely",
+          assistant.compare_snapshots(now, snapshot(rollups=[], receivings=[],
+                                                    expenses=[]))["sales_pct"],
+          None)
+    check("a period with no previous one at all simply has no change block",
+          "change" in assistant.build_context(current=now, previous=None,
+                                              series=[]), False)
+    check("the days themselves ride along for 'which day was best'",
+          assistant.build_context(current=now, previous=None,
+                                  series=[{"date": "2026-08-03"}])["series"],
+          [{"date": "2026-08-03"}])
+
+
+def test_an_answer_comes_back_with_what_could_not_be_checked():
+    section("An answer comes back with what could not be checked")
+
+    ctx = assistant.build_context(current=snapshot(), previous=None, series=[])
+
+    good = assistant.answer(Answering(), ctx, "เดือนนี้ขายได้เท่าไหร่")
+    check("a clean answer is returned", good["ok"], True)
+    check("with the text", good["answer"], "ยอดขาย 1,400 บาท ครับ")
+    check("and nothing flagged", good["unverified_numbers"], [])
+    check("the provider is recorded", good["provider"], "answering")
+
+    made_up = assistant.answer(Answering("เดือนนี้ขายได้ 88,000 บาท"), ctx, "ถามหน่อย")
+    check("an invented figure does not block the answer", made_up["ok"], True)
+    check("it is handed to the reader instead - only they can decide "
+          "whether to act on it",
+          made_up["unverified_numbers"], [88000.0])
+
+    check("an empty question is refused before anything is spent",
+          assistant.answer(Answering(), ctx, "   ")["error"], "ยังไม่ได้พิมพ์คำถาม")
+    long_one = assistant.answer(Answering(), ctx, "ก" * 500)
+    check("so is one long enough to hide instructions in", long_one["ok"], False)
+    check("and it says why", "ยาวเกินไป" in long_one["error"], True)
+
+    down = assistant.answer(Refusing(), ctx, "เดือนนี้เป็นไง")
+    check("a provider that refuses does not raise into the endpoint",
+          down["ok"], False)
+    check("its message is in Thai and says what to do",
+          "โควต้า" in down["error"], True)
+
+    sent = Answering()
+    assistant.answer(sent, ctx, "เดือนนี้เป็นไง")
+    check("the rules, the data and the question go separately",
+          sent.calls[0][2], "เดือนนี้เป็นไง")
+    check("and the data is the context, not the raw bills",
+          sorted(sent.calls[0][1]), ["period", "series"])
+
+
+def test_a_business_cannot_ask_forever():
+    section("A business cannot ask forever")
+
+    store = make_test_store(db=FakeDb())
+    check("a business that has not asked today is at zero",
+          store.assistant_asks_today("2026-08-27"), 0)
+
+    for _ in range(3):
+        store.record_assistant_ask("2026-08-27")
+    check("asking is counted", store.assistant_asks_today("2026-08-27"), 3)
+    check("yesterday's count is not today's",
+          store.assistant_asks_today("2026-08-26"), 0)
+
+    other = make_test_store(tenant_id="t2", db=store.db)
+    check("one business asking does not spend another's allowance",
+          other.assistant_asks_today("2026-08-27"), 0)
+    other.record_assistant_ask("2026-08-27")
+    check("and the two are counted apart",
+          [store.assistant_asks_today("2026-08-27"),
+           other.assistant_asks_today("2026-08-27")], [3, 1])
+
+
 def main():
     print("Assistant - phase 1")
     print("=" * 50)
@@ -288,6 +399,9 @@ def main():
     test_an_invented_figure_is_named_afterwards()
     test_what_must_never_leave_the_shop()
     test_the_port_holds_its_shape()
+    test_the_difference_between_two_periods_is_already_taken()
+    test_an_answer_comes_back_with_what_could_not_be_checked()
+    test_a_business_cannot_ask_forever()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

@@ -991,6 +991,20 @@ class Store:
                 # from that day should go with it.
                 briefs.document(day).delete()
 
+    # ---- what the assistant has been asked today -----------------------
+    # Per business, per day, because that is what a bill arrives for. It
+    # is a ceiling rather than a meter: nobody is charged, and the number
+    # exists so a runaway loop or a bored teenager cannot spend the
+    # shop's quota in an afternoon.
+
+    def assistant_asks_today(self, day: str) -> int:
+        doc = self._tenant_doc().collection("assistant_usage").document(day).get()
+        return int((doc.to_dict() or {}).get("asks") or 0) if doc.exists else 0
+
+    def record_assistant_ask(self, day: str):
+        self._tenant_doc().collection("assistant_usage").document(day).set(
+            {"asks": self.increment(1), "date": day}, merge=True)
+
     def get_brief(self, store_id: str, day: str) -> dict | None:
         doc = self._col(store_id, "daily_briefs").document(day).get()
         return doc.to_dict() if doc.exists else None

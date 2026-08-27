@@ -43,6 +43,11 @@ export const REGULAR = [
     was: 'รายการบิล', needs: 'view_money' },
   { to: '/income-expense', icon: Wallet, label: 'รายรับรายจ่าย',
     needs: 'view_money' },
+  // Last in the list on purpose. It answers questions about the pages
+  // above it, so it makes sense after them - and someone who has not
+  // found the figures yet should find the figures first.
+  { to: '/assistant', icon: ChatCircleText, label: 'ถามข้อมูลร้าน',
+    needs: 'view_money' },
 ];
 
 // Things set up once and rarely touched again. Collapsed behind a single
@@ -74,4 +79,5 @@ export const TABS = [
 import {
   House, Package, ShoppingCart, ClipboardText, Receipt, Wallet,
   GearSix, CookingPot, Tag, Users, PlugsConnected, List, Moped,
+  ChatCircleText,
 } from '@phosphor-icons/react';

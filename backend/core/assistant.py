@@ -304,3 +304,117 @@ def _numbers_in_text(text: str) -> list[float]:
         except ValueError:
             continue
     return found
+
+
+# ---- asking a question ---------------------------------------------------
+# The plan for this step was a set of tools the model could call to fetch
+# whatever period a question turned out to be about. It is not what got
+# built, and the reason is worth writing down.
+#
+# A tool that hands back raw rows puts the model straight back into doing
+# arithmetic, which is the one thing this whole design exists to avoid -
+# so the tools would have had to return pre-computed summaries anyway.
+# At which point the only thing they add over packing those summaries up
+# front is the ability to answer about an arbitrary period nobody chose.
+# And a person asking about last Songkran can pick last Songkran: that is
+# a date control, not a protocol, and it has the advantage of showing
+# them which period the answer is about instead of leaving them to trust
+# that the model picked the right one.
+#
+# So: the caller says which period, and everything about that period -
+# and the one before it, and the difference between them - is worked out
+# before the model is called. If a question genuinely needs a period the
+# caller did not pick, the honest answer is "ไม่มีข้อมูลช่วงนั้น", which
+# rule 2 of the instructions already requires.
+
+# A question long enough to hide instructions in is not a question about
+# takings. Short enough to be honest about, long enough for a real one.
+MAX_QUESTION_LENGTH = 400
+
+
+def build_context(*, current: dict, previous: dict | None,
+                  series: list[dict]) -> dict:
+    """What the model is shown for one question.
+
+    Two snapshots and the difference between them, already taken. The
+    subtraction is done here for the same reason every other figure is:
+    a model asked what changed will always produce a number.
+    """
+    context = {"period": current, "series": series}
+    if previous is not None:
+        context["previous_period"] = previous
+        context["change"] = compare_snapshots(current, previous)
+    return context
+
+
+def compare_snapshots(current: dict, previous: dict) -> dict:
+    """The differences between two periods, worked out rather than left
+    to be worked out."""
+    return {
+        "sales_baht": _delta(current["sales"]["total"], previous["sales"]["total"]),
+        "sales_pct": _change_pct(current["sales"]["total"],
+                                 previous["sales"]["total"]),
+        "bills": _delta(current["sales"]["bill_count"],
+                        previous["sales"]["bill_count"]),
+        "average_per_bill_baht": _delta(current["sales"]["average_per_bill"],
+                                        previous["sales"]["average_per_bill"]),
+        "net_profit_baht": _delta(current["profit"]["net"],
+                                  previous["profit"]["net"]),
+        "purchased_baht": _delta(current["cost"]["purchased_actual"],
+                                 previous["cost"]["purchased_actual"]),
+        # Named so the model does not have to infer direction from a sign
+        # and get it backwards on a negative profit.
+        "sales_direction": _direction(current["sales"]["total"],
+                                      previous["sales"]["total"]),
+    }
+
+
+def answer(provider, context: dict, question: str) -> dict:
+    """Ask one question and report what came back, with its warnings.
+
+    Never raises for a provider failure: the caller has a screen to
+    fill either way, and "ผู้ช่วยตอบไม่ได้ตอนนี้" is a better thing to
+    put on it than a stack trace.
+    """
+    question = (question or "").strip()
+    if not question:
+        return {"ok": False, "error": "ยังไม่ได้พิมพ์คำถาม"}
+    if len(question) > MAX_QUESTION_LENGTH:
+        return {"ok": False,
+                "error": f"คำถามยาวเกินไป (เกิน {MAX_QUESTION_LENGTH} ตัวอักษร)"}
+
+    try:
+        text = provider.ask(INSTRUCTIONS, context, question)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "ผู้ช่วยตอบไม่ได้ตอนนี้"}
+
+    unsupported = verify_numbers(text, context)
+    return {
+        "ok": True,
+        "answer": text.strip(),
+        # Shown to the reader, not swallowed. An answer carrying a figure
+        # the data cannot account for is still worth reading - it is just
+        # not worth acting on without checking, and only the reader can
+        # be told that.
+        "unverified_numbers": unsupported,
+        "provider": getattr(provider, "name", "unknown"),
+    }
+
+
+def _delta(current: float, previous: float) -> float:
+    return round((current or 0) - (previous or 0), 2)
+
+
+def _change_pct(current: float, previous: float) -> float | None:
+    """None when there is nothing to compare against - the same choice
+    sales_report.compare_previous makes, so a shop's first month is not
+    reported as up a hundred percent from nothing."""
+    if not previous:
+        return None
+    return round(((current or 0) - previous) / previous * 100, 1)
+
+
+def _direction(current: float, previous: float) -> str:
+    if current > previous:
+        return "up"
+    return "down" if current < previous else "flat"
