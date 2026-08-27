@@ -151,6 +151,20 @@ export default function Recipes() {
       )}
 
       <div className="card">
+        {/* An empty card is not an empty state. With no menus this page
+            was a heading, one sentence, and a blank rounded box - which
+            says nothing about why it is empty or what to do next. */}
+        {items.length === 0 && (
+          <div style={{ padding: '26px 18px', textAlign: 'center' }}>
+            <p style={{ fontSize: 13.5, fontWeight: 500, margin: '0 0 5px' }}>
+              ยังไม่มีเมนูให้ผูกสูตร
+            </p>
+            <p style={{ fontSize: 12.5, color: 'var(--text-muted)', margin: 0, lineHeight: 1.6 }}>
+              เมนูมาจาก Loyverse — เพิ่มเมนูในนั้นแล้วกลับมาที่หน้านี้
+              <br />ถ้าเพิ่งเพิ่มไป ลองกด "อัปเดตข้อมูล" ที่หน้าแรกก่อน
+            </p>
+          </div>
+        )}
         {items.map((it, idx) => {
           const recipe = recipeMap[it.name] || [];
           const draft = drafts[it.name];

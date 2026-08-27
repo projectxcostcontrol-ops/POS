@@ -67,11 +67,13 @@ function AppShell() {
   const homePath = '/';
 
   // The admin link only appears for the handful of emails configured on the
-  // backend. Asking is harmless - a normal user gets a 404 and simply never
-  // sees the link.
+  // backend, and /api/me already says so. It used to be asked separately on
+  // every page load, and since that endpoint answers 404 to everyone who
+  // isn't an admin, every screen logged a red console error - which is how
+  // a real error stops being noticed.
   useEffect(() => {
-    api.adminWhoami().then(() => setIsAdmin(true)).catch(() => setIsAdmin(false));
-  }, []);
+    setIsAdmin(!!profile?.is_admin);
+  }, [profile]);
 
 
   return (

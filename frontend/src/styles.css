@@ -16,8 +16,16 @@ button:hover:not(:disabled) { background: #eee3d8; }
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { cursor: not-allowed; opacity: .55; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid rgba(185,71,46,.2); outline-offset: 2px; }
-.button-primary, button[style*="var(--accent)"] { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
-.button-primary:hover:not(:disabled), button[style*="var(--accent)"]:hover:not(:disabled) { background: var(--accent-dark) !important; }
+/* The second selector matches only an inline BACKGROUND of the accent
+   colour. It used to be button[style*="var(--accent)"], which matched
+   the substring anywhere in the inline style - so a plain text link
+   written as color: var(--accent) was silently promoted to a filled
+   red button with white text, and with padding:0 on it came out as a
+   cropped red chip. It caught the "create an account" link and the
+   "switch account" link, and would have caught every future button
+   that wanted an accent-coloured anything. */
+.button-primary, button[style*="background: var(--accent)"] { display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--accent) !important; color: #fff !important; border-color: var(--accent) !important; }
+.button-primary:hover:not(:disabled), button[style*="background: var(--accent)"]:hover:not(:disabled) { background: var(--accent-dark) !important; }
 input, select, textarea { min-height: 42px; border: 1px solid var(--border-strong); border-radius: 10px; padding: 9px 12px; background: var(--surface-2); color: var(--text-primary); transition: border-color .16s ease, box-shadow .16s ease; }
 input:hover, select:hover, textarea:hover { border-color: #cbb7a6; }
 input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(185,71,46,.1); outline: none; }

@@ -236,6 +236,20 @@ export default function IncomeExpense() {
         </p>
       )}
 
+      {/* The bigger reason the profit figure can be wrong, and the one a
+          new shop hits first: nothing has been spent, as far as the app
+          knows, so "กำไรสุทธิ" is just the takings with a different label.
+          Named for the same reason the uncosted menus are - the number
+          gives no hint on its own. */}
+      {(overview?.total || 0) > 0 && totalExpense === 0 && (
+        <p style={{
+          fontSize: 12, color: 'var(--text-warning)', margin: '-12px 0 20px',
+        }}>
+          ช่วงนี้ยังไม่มีรายจ่ายบันทึกไว้เลย (ค่าเช่า ค่าไฟ ค่าแรง ค่าวัตถุดิบ) —
+          กำไรสุทธิที่เห็นจึงเท่ากับรายรับ ยังไม่ใช่กำไรจริง
+        </p>
+      )}
+
       {/* One list instead of three tabs. The categories were never
           separate things to work on - they're a label on each entry - and
           splitting them meant three places to look for "what did I spend

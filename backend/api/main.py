@@ -44,7 +44,7 @@ from core.delivery import (CHANNELS, DeliveryError, clean_order,
 from core.unit_conversion import apply_unit_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
-from core.auth import can, CAPABILITIES, OWNER, ROLES
+from core.auth import can, CAPABILITIES, OWNER, ROLES, is_super_admin
 from api.deps import make_auth_dependencies
 
 load_dotenv()
@@ -561,6 +561,37 @@ def list_connections(c: Ctx = Depends(require_settings)):
     } for conn in c.connections]}
 
 
+def _connect_failure(error: Exception) -> str:
+    """Why connecting didn't work, in words the person can act on.
+
+    This used to be "เช็ค token: " with the exception pasted after it,
+    which was wrong twice over. It told a shop owner to go and make a new
+    token no matter what had actually happened - so someone whose wifi
+    was down would sit there generating tokens that were never the
+    problem. And what followed the colon was a Python traceback string:
+    "HTTPSConnectionPool(host='api.loyverse.com', port=443): Max retries
+    exceeded...". Nobody running a restaurant can do anything with that.
+    """
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+
+    if status in (401, 403):
+        return ("token นี้ใช้ไม่ได้ - อาจพิมพ์ตกหล่นหรือถูกยกเลิกไปแล้ว "
+                "ลองสร้าง Access Token ใหม่จาก Loyverse Back Office")
+    if status == 402:
+        return "แพ็กเกจ Loyverse ของบัญชีนี้ไม่รองรับการเชื่อมต่อผ่าน API"
+    if status == 429:
+        return "Loyverse จำกัดจำนวนคำขอชั่วคราว รอสักครู่แล้วลองใหม่"
+    if isinstance(error, requests.RequestException) and response is None:
+        # No response at all: it never reached Loyverse. Blaming the token
+        # here is the mistake that sends people off to fix the wrong thing.
+        return ("ต่อ Loyverse ไม่ติดตอนนี้ - เช็คอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง "
+                "(ยังไม่ต้องสร้าง token ใหม่)")
+    if status:
+        return f"Loyverse ตอบกลับผิดพลาด ({status}) ลองใหม่อีกครั้ง"
+    return "เชื่อมต่อไม่สำเร็จ ลองใหม่อีกครั้ง"
+
+
 def _add_connection(c: Ctx, token: str, label: str) -> dict:
     token = (token or "").strip()
     if not token:
@@ -571,7 +602,7 @@ def _add_connection(c: Ctx, token: str, label: str) -> dict:
     try:
         stores = LoyverseAdapter(token).get_stores()
     except Exception as e:
-        raise HTTPException(400, f"เชื่อมต่อไม่สำเร็จ - เช็ค token: {e}")
+        raise HTTPException(400, _connect_failure(e))
 
     for existing in c.store.list_connections():
         if existing.get("token") == token:
@@ -2113,6 +2144,12 @@ def get_me(c: Ctx = Depends(ctx)):
         # Read from the same settings document the timezone comes from, so
         # it costs nothing extra.
         "onboarding_dismissed_at": c.store.get_setting("onboarding_dismissed_at"),
+        # Answered here rather than by letting the app probe
+        # /api/admin/whoami on every page load - that endpoint returns 404
+        # to everyone who isn't one, so the console filled with red on
+        # every screen, which is how a real error goes unnoticed. It costs
+        # nothing: super admins are an environment variable, not a lookup.
+        "is_admin": is_super_admin(c.user.get("email") or ""),
     }
 
 

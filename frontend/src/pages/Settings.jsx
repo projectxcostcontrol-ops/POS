@@ -19,6 +19,7 @@ export default function Settings() {
   const [intervalInput, setIntervalInput] = useState('');
   const [savingInterval, setSavingInterval] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState('');
   const [resettingCursor, setResettingCursor] = useState(false);
@@ -321,6 +322,25 @@ export default function Settings() {
         ))}
       </div>
 
+      {/* Everything below this line is maintenance: a one-time migration,
+          a recompute, a manual sync, a cursor reset. None of it means
+          anything to a shop that set up today, and it was sitting at the
+          same weight as the one field they actually need - with
+          "รีเซ็ตจุดซิงก์" among it, which is exactly the button someone
+          presses when they are confused and looking for something to try.
+
+          Folded away rather than removed: the day they are needed, they
+          are needed badly, and hunting for them in a release note is
+          worse than one extra tap. */}
+      <button onClick={() => setShowTools(!showTools)} style={{
+        width: '100%', textAlign: 'left', background: 'var(--surface-1)',
+        marginBottom: showTools ? 16 : 0, fontSize: 13, fontWeight: 500,
+        color: 'var(--text-secondary)',
+      }}>
+        {showTools ? '▾' : '▸'} เครื่องมือขั้นสูง · ความถี่ซิงก์ ซ่อมข้อมูล
+      </button>
+
+      {showTools && (<>
       <div className="card" style={{ marginBottom: 16 }}>
         <p style={{ fontSize: 14, fontWeight: 500, margin: '0 0 12px' }}>ความถี่การซิงก์อัตโนมัติ</p>
         <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '0 0 12px' }}>
@@ -397,6 +417,7 @@ export default function Settings() {
           <p style={{ fontSize: 12, color: 'var(--text-danger)', marginTop: 8 }}>{syncError}</p>
         )}
       </div>
+      </>)}
     </div>
   );
 }
