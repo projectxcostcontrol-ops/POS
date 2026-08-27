@@ -393,6 +393,9 @@ export default function Assistant() {
           }}>
             {result.question} · {result.from} ถึง {result.to}
           </p>
+          {result.decision_support && (
+            <DecisionSupportCard data={result.decision_support} navigate={navigate} />
+          )}
           {result.answer.split('\n').filter(Boolean).map((line, i) => (
             <p key={i} style={{ margin: i === 0 ? 0 : '8px 0 0', fontSize: 14, lineHeight: 1.6 }}>
               {line}
@@ -416,7 +419,7 @@ export default function Assistant() {
             </p>
           )}
 
-          {result.caveats?.length > 0 && (
+          {!result.decision_support && result.caveats?.length > 0 && (
             <div style={{
               marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--border)',
             }}>
@@ -608,4 +611,75 @@ function addDays(day, amount) {
   date.setDate(date.getDate() + amount);
   const pad = (value) => String(value).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function DecisionSupportCard({ data, navigate }) {
+  const conclusion = data.conclusion || {};
+  const action = data.next_action;
+  return (
+    <div style={decisionCardStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8,
+        alignItems: 'flex-start' }}>
+        <div>
+          <span style={rankStyle}>{data.intent_label}</span>
+          <h3 style={{ margin: '4px 0 0', fontSize: 16 }}>{conclusion.label}</h3>
+        </div>
+        <span style={confidenceStyle}>มั่นใจ{data.confidence}</span>
+      </div>
+
+      {data.evidence?.length > 0 && (
+        <div style={decisionEvidenceStyle}>
+          {data.evidence.slice(0, 6).map((row, index) => (
+            <div key={`${row.label}-${index}`}>
+              <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>{row.label}</span>
+              {row.value != null && (
+                <strong style={{ display: 'block', marginTop: 1, fontSize: 13 }}>
+                  {formatEvidence(row.value, row.unit)}
+                </strong>
+              )}
+              {row.detail && <small style={{ color: 'var(--text-secondary)' }}>{row.detail}</small>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {data.missing_data?.length > 0 && (
+        <p style={{ margin: '9px 0 0', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+          <strong>ข้อมูลที่ยังขาด:</strong> {data.missing_data.join(', ')}
+        </p>
+      )}
+      {data.limitation && (
+        <p style={{ margin: '5px 0 0', fontSize: 11.5, color: 'var(--text-muted)' }}>
+          ข้อจำกัด: {data.limitation}
+        </p>
+      )}
+      {action?.path && (
+        <button type="button" style={actionStyle} onClick={() => navigate(action.path)}>
+          {action.label}<ArrowRight size={14} />
+        </button>
+      )}
+      {action?.type === 'track' && !action.path && (
+        <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--accent)' }}>
+          ขั้นตอนถัดไป: {action.label}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const decisionCardStyle = {
+  marginBottom: 12, padding: '12px 13px', borderRadius: 10,
+  border: '1px solid color-mix(in srgb, var(--accent) 28%, var(--border))',
+  background: 'var(--surface-1)',
+};
+const decisionEvidenceStyle = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))',
+  gap: 8, marginTop: 10, paddingTop: 9, borderTop: '1px solid var(--border)',
+};
+
+function formatEvidence(value, unit) {
+  const number = Number(value);
+  const formatted = Number.isFinite(number)
+    ? number.toLocaleString('th-TH', { maximumFractionDigits: 2 }) : String(value);
+  return unit ? `${formatted} ${unit}` : formatted;
 }

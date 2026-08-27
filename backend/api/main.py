@@ -36,6 +36,7 @@ from core import daily_rollup
 from core import daily_brief
 from core import assistant as assistant_lib
 from core import advisor as advisor_lib
+from core import question_intent
 from core.expenses import clean_expense, ExpenseError
 from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
@@ -1393,9 +1394,13 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
     previous, _ = _period_snapshot(c, store_id, prev_first, prev_last, tz, today,
                                    recipes, materials)
 
+    previous_trimmed = _trim_previous(previous)
     context = assistant_lib.build_context(
-        current=current, previous=_trim_previous(previous),
+        current=current, previous=previous_trimmed,
         series=daily_rollup.breakdown(rollups))
+    decision_support = question_intent.analyze(
+        data.get("question", ""), current, previous_trimmed)
+    context["question_analysis"] = decision_support
 
     history = data.get("previous_questions") or []
     if not isinstance(history, list):
@@ -1410,7 +1415,8 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
     return {**result, "from": first, "to": last,
             "asks_today": asked + (1 if result["ok"] else 0),
             "daily_limit": ASSISTANT_DAILY_LIMIT,
-            "caveats": current.get("caveats", [])}
+            "caveats": current.get("caveats", []),
+            "decision_support": decision_support}
 
 
 @app.get("/api/{store_id}/assistant/insights")

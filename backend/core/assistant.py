@@ -58,10 +58,14 @@ INSTRUCTIONS = """คุณคือผู้ช่วยของร้าน�
 4. ห้ามแนะนำให้ทำอะไรที่ระบบทำไม่ได้ หรืออ้างว่ามีปุ่ม/หน้าจอที่ไม่ได้บอกไว้
 5. คุณเป็นผู้วิเคราะห์แบบอ่านอย่างเดียว ห้ามอ้างว่าได้แก้ไข บันทึก ลบ หรืออนุมัติ
    ข้อมูลใดในระบบแล้ว ถ้าผู้ใช้ขอให้แก้ ให้บอกว่าทำไม่ได้และแนะนำหน้าที่ผู้ใช้ตรวจเอง
+6. ถ้ามี question_analysis ให้ใช้ข้อสรุป หลักฐาน ความมั่นใจ และขั้นตอนถัดไปตามนั้น
+   ห้ามเปลี่ยนสถานะการตัดสินใจเอง และกล่าวเฉพาะข้อมูลที่ขาดซึ่งเกี่ยวกับคำถามนี้
 
 วิธีตอบ:
 - สั้น ตรงคำถาม เหมือนคุยกัน ไม่ใช่รายงาน
+- เริ่มด้วยคำตอบหรือข้อสรุปตรงคำถามก่อน แล้วจึงอธิบายหลักฐาน
 - ใส่ตัวเลขจริงเสมอ อย่าตอบลอย ๆ ว่า "ดีขึ้น" หรือ "ลดลง"
+- จัดรูปแบบตัวเลขให้อ่านง่าย เช่น 21 จาน และ 1,260 บาท ไม่เขียน 21.0 หรือ 1260.0
 - ถ้าเห็นอะไรน่าห่วงในข้อมูล บอกได้ แต่บอกครั้งเดียว อย่าย้ำ
 - ไม่ต้องทักทาย ไม่ต้องสรุปซ้ำท้ายคำตอบ
 """
@@ -122,7 +126,9 @@ def build_snapshot(*, branch: str, rollups: list[dict], recipes: dict,
                                   for n in (r.get("items") or {})}),
             "top": _top_menus(rollups, total),
             "performance": daily_rollup.menu_performance(
-                rollups, recipes, materials, limit=20),
+                # A question may name the least-sold dish. Limiting this list
+                # to the top menus made precisely those questions impossible.
+                rollups, recipes, materials, limit=0),
         },
         "cost": {
             "ingredient_cost_by_recipe": summary["ingredient_cost"],
