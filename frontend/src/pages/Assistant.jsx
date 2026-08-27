@@ -60,6 +60,8 @@ export default function Assistant() {
   const [trackingBusy, setTrackingBusy] = useState('');
   const activeStore = useMemo(
     () => stores.find((store) => store.id === storeId), [stores, storeId]);
+  const comparisonPeriod = useMemo(
+    () => comparisonPeriods(range.from, range.to), [range.from, range.to]);
 
   useEffect(() => {
     if (!storeId || !range.from || !range.to) return undefined;
@@ -165,7 +167,7 @@ export default function Assistant() {
     <div>
       <div className="page-header">
         <div>
-          <h1>ถามข้อมูลร้าน</h1>
+          <h1>ผู้ช่วยวิเคราะห์ร้าน</h1>
           <p className="page-subtitle">
             {activeStore?.name ? `${activeStore.name} · ` : ''}
             ตอบจากข้อมูลในระบบเท่านั้น ถ้าไม่มีข้อมูลจะบอกว่าไม่มี
@@ -250,9 +252,14 @@ export default function Assistant() {
 
       {analysis && (
         <section aria-labelledby="deep-analysis" style={{ marginBottom: 22 }}>
-          <h2 id="deep-analysis" style={{ margin: '0 0 9px', fontSize: 17 }}>
-            วิเคราะห์เชิงลึก
-          </h2>
+          <div style={{ marginBottom: 9 }}>
+            <h2 id="deep-analysis" style={{ margin: 0, fontSize: 17 }}>
+              ผลประกอบการ {comparisonPeriod.current}
+            </h2>
+            <p style={{ margin: '2px 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
+              เปรียบเทียบกับ {comparisonPeriod.previous} ซึ่งมีจำนวนวันเท่ากัน
+            </p>
+          </div>
 
           {analysis.period_changes && (
             <div style={changeGridStyle}>
@@ -499,12 +506,16 @@ function ChangeCard({ label, value, favorable = 'up' }) {
   return (
     <div style={changeCardStyle}>
       <p style={{ margin: 0, fontSize: 11.5, color: 'var(--text-muted)' }}>{label}</p>
-      <p style={{ margin: '4px 0 0', fontSize: 14, fontWeight: 700,
-        ...changeColor(value.change, favorable) }}>
-        {formatChange(value.change)} บาท
+      <p style={{ margin: '4px 0 0', fontSize: 19, fontWeight: 700,
+        color: 'var(--text-primary)' }}>
+        {formatBaht(value.current)}
       </p>
-      <p style={{ margin: '2px 0 0', fontSize: 10.5, color: 'var(--text-muted)' }}>
-        ช่วงนี้ {formatBaht(value.current)} · ก่อนหน้า {formatBaht(value.previous)}
+      <p style={{ margin: '3px 0 0', fontSize: 10.5, color: 'var(--text-muted)' }}>
+        ก่อนหน้า {formatBaht(value.previous)}
+      </p>
+      <p style={{ margin: '2px 0 0', fontSize: 11.5, fontWeight: 600,
+        ...changeColor(value.change, favorable) }}>
+        {changeDescription(value.change, value.change_pct)}
       </p>
     </div>
   );
@@ -525,6 +536,55 @@ function changeColor(value, favorable = 'up') {
   if (value == null || Number(value) === 0) return { color: 'var(--text-muted)' };
   const good = favorable === 'up' ? Number(value) > 0 : Number(value) < 0;
   return { color: good ? 'var(--success)' : 'var(--text-danger)' };
+}
+
+function changeDescription(change, percentage) {
+  const value = Number(change || 0);
+  if (value === 0) return 'ไม่เปลี่ยนแปลงจากช่วงก่อน';
+  const direction = value > 0 ? 'เพิ่มขึ้น' : 'ลดลง';
+  const amount = Math.abs(value).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+  const pct = percentage == null ? ''
+    : ` (${Math.abs(Number(percentage)).toLocaleString('th-TH', { maximumFractionDigits: 1 })}%)`;
+  return `${direction} ${amount} บาท${pct}`;
+}
+
+function comparisonPeriods(from, to) {
+  const start = utcDay(from);
+  const end = utcDay(to);
+  if (!start || !end || end < start) return { current: '', previous: '' };
+  const day = 86400000;
+  const days = Math.round((end - start) / day) + 1;
+  const previousEnd = new Date(start.getTime() - day);
+  const previousStart = new Date(previousEnd.getTime() - ((days - 1) * day));
+  return {
+    current: formatThaiRange(start, end),
+    previous: formatThaiRange(previousStart, previousEnd),
+  };
+}
+
+const THAI_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+  'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+function utcDay(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  return match ? new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1,
+    Number(match[3]))) : null;
+}
+
+function formatThaiRange(start, end) {
+  const startDay = start.getUTCDate();
+  const endDay = end.getUTCDate();
+  const startMonth = THAI_MONTHS[start.getUTCMonth()];
+  const endMonth = THAI_MONTHS[end.getUTCMonth()];
+  const startYear = start.getUTCFullYear() + 543;
+  const endYear = end.getUTCFullYear() + 543;
+  if (startYear === endYear && start.getUTCMonth() === end.getUTCMonth()) {
+    return `${startDay}–${endDay} ${endMonth} ${endYear}`;
+  }
+  if (startYear === endYear) {
+    return `${startDay} ${startMonth}–${endDay} ${endMonth} ${endYear}`;
+  }
+  return `${startDay} ${startMonth} ${startYear}–${endDay} ${endMonth} ${endYear}`;
 }
 
 const STATUS_LABEL = {

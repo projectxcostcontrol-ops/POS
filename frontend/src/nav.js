@@ -46,7 +46,7 @@ export const REGULAR = [
   // Last in the list on purpose. It answers questions about the pages
   // above it, so it makes sense after them - and someone who has not
   // found the figures yet should find the figures first.
-  { to: '/assistant', icon: ChatCircleText, label: 'ถามข้อมูลร้าน',
+  { to: '/assistant', icon: ChatCircleText, label: 'ผู้ช่วยวิเคราะห์ร้าน',
     needs: 'view_money' },
 ];
 
