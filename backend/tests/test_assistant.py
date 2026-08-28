@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core import assistant
 from core import daily_rollup as roll
+from core import shop_query
 from core.assistant_provider import AssistantProvider, AssistantError
 from tests.fake_firestore import make_test_store, FakeDb
 
@@ -499,6 +500,111 @@ def test_capping_narrows_what_counts_as_a_verified_number():
           assistant.verify_numbers(f"ยอดขาย {hidden['revenue']:.0f} บาท", asked), [])
 
 
+class Querying(AssistantProvider):
+    """A provider that asks for a slice before answering."""
+    name = "querying"
+
+    def __init__(self, calls, reply=None):
+        self.wanted = calls
+        self.reply = reply
+        self.results = []
+        self.fell_back = False
+
+    def ask(self, instructions, snapshot, question):
+        self.fell_back = True
+        return "ตอบจากข้อมูลที่ให้มาเลย"
+
+    def converse(self, instructions, snapshot, question, tools, run_tool):
+        self.tools = tools
+        for args in self.wanted:
+            self.results.append(run_tool(tools[0]["name"], args))
+        return self.reply or "ดูให้แล้วครับ"
+
+
+def test_the_model_can_ask_for_a_slice_it_was_not_given():
+    section("The model can ask for a slice it was not given")
+
+    rollups = list(roll.build_many(SALES, BKK).values())
+
+    def run_tool(name, args):
+        return shop_query.run(assistant.tool_args_to_spec(args),
+                              rollups=rollups, recipes=RECIPES,
+                              materials=MATERIALS)
+
+    ctx = assistant.build_context(current=snapshot(), previous=None, series=[])
+    provider = Querying([{"group_by": "weekday", "metrics": ["sales"]}])
+    out = assistant.answer(provider, ctx, "วันไหนของสัปดาห์ขายดี",
+                           run_tool=run_tool)
+
+    check("the answer comes back", out["ok"], True)
+    check("and says what it went and looked at",
+          out["queries"][0]["group_by"], "weekday")
+    check("the tool it was offered is the query tool",
+          provider.tools[0]["name"], "query_shop_data")
+    check("which returned rows computed in Python",
+          provider.results[0]["rows"][0]["group"] in
+          ("จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"), True)
+
+    # The figure it found was nowhere in the fixed context. Without the
+    # query results in the pool, an answer built from a query would be
+    # flagged for every number it contains.
+    found = provider.results[0]["rows"][0]["sales"]
+    said = assistant.answer(
+        Querying([{"group_by": "weekday", "metrics": ["sales"]}],
+                 reply=f"วันที่ขายดีสุดทำได้ {found:.0f} บาท"),
+        ctx, "วันไหนขายดี", run_tool=run_tool)
+    check("a number the query returned counts as a shop fact",
+          said["unverified_numbers"], [])
+    check("while one that came from nowhere still does not",
+          assistant.answer(Querying([{"group_by": "weekday", "metrics": ["sales"]}],
+                                    reply="วันพุธทำได้ 91,234 บาท"),
+                           ctx, "วันไหนขายดี", run_tool=run_tool)
+          ["unverified_numbers"], [91234.0])
+
+
+def test_a_refusal_reaches_the_model_as_a_reason():
+    section("A refusal reaches the model as a reason")
+
+    rollups = list(roll.build_many(SALES, BKK).values())
+    seen = {}
+
+    def run_tool(name, args):
+        spec = assistant.tool_args_to_spec(args)
+        try:
+            return shop_query.run(spec, rollups=rollups, recipes=RECIPES,
+                                  materials=MATERIALS)
+        except shop_query.QueryError as e:
+            seen["error"] = str(e)
+            return {"error": str(e)}
+
+    ctx = assistant.build_context(current=snapshot(), previous=None, series=[])
+    provider = Querying([{"group_by": "menu", "metrics": ["sales"],
+                          "filter_channel": "grab"}])
+    out = assistant.answer(provider, ctx, "grab ขายเมนูไหนดี", run_tool=run_tool)
+
+    check("the question still gets an answer", out["ok"], True)
+    check("the model was told why, not handed an exception",
+          "ไม่ได้เก็บว่าแต่ละช่องทางขายเมนูไหน" in seen.get("error", ""), True)
+    check("and the refusal is what the tool returned",
+          "error" in provider.results[0], True)
+
+
+def test_a_provider_without_tools_still_answers():
+    section("A provider without tools still answers")
+
+    ctx = assistant.build_context(current=snapshot(), previous=None, series=[])
+    plain = Answering("ยอดขาย 1,400 บาท ครับ")
+    out = assistant.answer(plain, ctx, "เดือนนี้เป็นไง", run_tool=lambda n, a: {})
+    # Querying overrides converse; Answering does not, so the port's default
+    # falls through to ask() - less complete, rather than broken.
+    check("it falls through to the plain path", out["ok"], True)
+    check("with the answer it could give", out["answer"], "ยอดขาย 1,400 บาท ครับ")
+    check("and nothing was queried", out["queries"], [])
+
+    check("there is a cap on how many rounds it may take",
+          assistant.MAX_TOOL_ROUNDS <= 3, True)
+
+
 def main():
     print("Assistant - phase 1")
     print("=" * 50)
@@ -513,6 +619,9 @@ def main():
     test_a_business_cannot_ask_forever()
     test_the_whole_menu_is_known_but_only_part_of_it_travels()
     test_capping_narrows_what_counts_as_a_verified_number()
+    test_the_model_can_ask_for_a_slice_it_was_not_given()
+    test_a_refusal_reaches_the_model_as_a_reason()
+    test_a_provider_without_tools_still_answers()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

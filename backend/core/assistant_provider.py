@@ -54,6 +54,23 @@ class AssistantProvider(ABC):
         """
 
 
+    def converse(self, instructions: str, snapshot: dict, question: str,
+                 tools: list[dict], run_tool) -> str:
+        """Answer, with the option of asking for data first.
+
+        `tools` describes what may be asked for; `run_tool(name, args)`
+        runs it and returns a dict. A provider that implements this lets
+        the model choose WHICH figures it needs - it still never produces
+        one, because run_tool is Python and the model only writes the
+        request (see core/shop_query.py).
+
+        Not abstract, and it falls through to `ask` rather than raising:
+        a provider without function calling should still answer from the
+        figures it was handed, less completely rather than not at all.
+        """
+        return self.ask(instructions, snapshot, question)
+
+
 class AssistantError(Exception):
     """Raised when a provider can't produce a usable answer - no API key,
     quota hit, network failure, or an empty response.

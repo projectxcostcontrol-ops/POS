@@ -35,6 +35,7 @@ from core import sales_report
 from core import daily_rollup
 from core import daily_brief
 from core import assistant as assistant_lib
+from core import shop_query
 from core import advisor as advisor_lib
 from core import question_intent
 from core.expenses import clean_expense, ExpenseError
@@ -1444,12 +1445,42 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
         current=current, previous=previous_trimmed,
         series=daily_rollup.breakdown(rollups), question=question)
     context["question_analysis"] = decision_support
+    # The schema, so the model knows what it can go and ask for - and,
+    # just as usefully, what the shop does not record at all. That list is
+    # what turns "ไม่มีข้อมูล" into "this is not recorded; here is what to
+    # start recording."
+    context["data_available"] = shop_query.describe()
 
     history = data.get("previous_questions") or []
     if not isinstance(history, list):
         raise HTTPException(400, "ประวัติคำถามไม่ถูกต้อง")
+    # A question can reach outside the chosen window - "เดือนที่แล้วล่ะ" -
+    # so queries are not limited to it. They ARE limited to this branch and
+    # this business: the data handed in below is already tenant-scoped, and
+    # nothing in the spec can name a store.
+    def run_query(name, args):
+        if name != assistant_lib.QUERY_TOOL["name"]:
+            return {"error": f"ไม่มีเครื่องมือชื่อ {name}"}
+        spec = assistant_lib.tool_args_to_spec(args)
+        window = _query_window(spec, first, last)
+        try:
+            return shop_query.run(
+                spec,
+                rollups=daily_rollup.ensure_daily(
+                    c.store, store_id, window[0], window[1], tz, today),
+                recipes=recipes, materials=materials,
+                expenses=c.store.list_expenses(
+                    store_id, start=window[0], end=window[1]))
+        except shop_query.QueryError as e:
+            # Handed back as the reason rather than raised. "The shop does
+            # not record which menu each channel sold" is exactly what the
+            # person asking deserves to hear, and the model can only pass
+            # it on if it is told.
+            return {"error": str(e)}
+
     result = assistant_lib.answer(provider, context, question,
-                                  previous_questions=history)
+                                  previous_questions=history,
+                                  run_tool=run_query)
     if result["ok"]:
         # Counted only when a question actually reached the provider. A
         # refused empty box should not cost anyone their allowance.
@@ -1614,6 +1645,24 @@ def _validated_assistant_window(first_value: str | None,
         raise HTTPException(
             400, f"ช่วงที่ถามยาวเกิน {MAX_ASK_DAYS} วัน - เลือกช่วงให้แคบลง")
     return first, last, span
+
+
+def _query_window(spec: dict, default_first: str,
+                  default_last: str) -> tuple[str, str]:
+    """The days one query may read, capped the same way a question is.
+
+    A query may reach outside the period on the screen, which is the whole
+    point of it - but not past MAX_ASK_DAYS, or a mis-typed year would
+    read a decade of rollups to answer one sentence.
+    """
+    first = spec.get("from") or default_first
+    last = spec.get("to") or default_last
+    if last < first:
+        first, last = last, first
+    span = daily_rollup.days_between(first, last)
+    if len(span) > MAX_ASK_DAYS:
+        first = _shift_day(last, -(MAX_ASK_DAYS - 1))
+    return first, last
 
 
 def _period_snapshot(c: Ctx, store_id: str, first: str, last: str, tz: int,

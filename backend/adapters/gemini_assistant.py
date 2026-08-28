@@ -84,6 +84,93 @@ class GeminiAssistantAdapter(AssistantProvider):
         return _extract_text(resp.json())
 
 
+    def converse(self, instructions: str, snapshot: dict, question: str,
+                 tools: list[dict], run_tool) -> str:
+        """Answer, letting the model ask for figures it does not have.
+
+        The model never receives rows to add up. It sends a request, this
+        runs it (core/shop_query), and hands back a result whose numbers
+        were computed in Python - so "never do arithmetic" stays true
+        while the set of answerable questions stops being a fixed list.
+
+        A refused request is handed back as its reason rather than as an
+        error, on purpose: "the shop does not record which menu each
+        channel sold" is exactly what the person asking deserves to be
+        told, and the model can only pass it on if it is told itself.
+        """
+        from core.assistant import MAX_TOOL_ROUNDS
+
+        if not self.api_key:
+            raise AssistantError("ยังไม่ได้ตั้งค่า GEMINI_API_KEY - "
+                                 "ผู้ช่วยจึงยังใช้งานไม่ได้")
+
+        contents = [{"role": "user",
+                     "parts": [{"text": _prompt(snapshot, question)}]}]
+        declarations = [{"name": t["name"], "description": t["description"],
+                         "parameters": t["parameters"]} for t in tools]
+
+        for _ in range(MAX_TOOL_ROUNDS + 1):
+            body = self._generate(instructions, contents,
+                                  tools=[{"functionDeclarations": declarations}])
+            parts = _parts(body)
+            calls = [p["functionCall"] for p in parts if "functionCall" in p]
+            if not calls:
+                return _join_text(parts)
+
+            contents.append({"role": "model", "parts": parts})
+            answers = []
+            for call in calls:
+                try:
+                    result = run_tool(call.get("name"), call.get("args") or {})
+                except Exception as e:
+                    result = {"error": str(e)}
+                answers.append({"functionResponse": {
+                    "name": call.get("name"), "response": result}})
+            contents.append({"role": "user", "parts": answers})
+
+        # Out of rounds. Ask once more with the tool taken away, so the
+        # shop gets an answer from what was gathered rather than nothing.
+        return _join_text(_parts(self._generate(instructions, contents)))
+
+    def _generate(self, instructions: str, contents: list[dict],
+                  tools: list[dict] | None = None) -> dict:
+        payload = {
+            "systemInstruction": {"parts": [{"text": instructions}]},
+            "contents": contents,
+            "generationConfig": {"temperature": 0,
+                                 "maxOutputTokens": MAX_OUTPUT_TOKENS},
+        }
+        if tools:
+            payload["tools"] = tools
+
+        url = f"{API_BASE}/{self.model}:generateContent"
+        try:
+            resp = requests.post(url, json=payload, timeout=TIMEOUT_SECONDS,
+                                 headers={"x-goog-api-key": self.api_key})
+        except requests.RequestException as e:
+            raise AssistantError("ต่อผู้ช่วยไม่ติดตอนนี้ ลองใหม่อีกครั้ง") from e
+        if resp.status_code == 429:
+            raise AssistantError("ผู้ช่วยถูกใช้งานเยอะเกินโควต้าชั่วคราว "
+                                 "ลองใหม่อีกสักครู่")
+        if not resp.ok:
+            raise AssistantError(f"ผู้ช่วยตอบกลับผิดพลาด ({resp.status_code})")
+        return resp.json()
+
+
+def _parts(body: dict) -> list[dict]:
+    try:
+        return body["candidates"][0]["content"]["parts"]
+    except (KeyError, IndexError):
+        return []
+
+
+def _join_text(parts: list[dict]) -> str:
+    text = "".join(p.get("text", "") for p in parts).strip()
+    if not text:
+        raise AssistantError("ผู้ช่วยไม่ได้ตอบอะไรกลับมา ลองถามใหม่อีกครั้ง")
+    return text
+
+
 def _prompt(snapshot: dict, question: str) -> str:
     """The figures first, the question last.
 

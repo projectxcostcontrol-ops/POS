@@ -474,8 +474,73 @@ def compare_snapshots(current: dict, previous: dict) -> dict:
     }
 
 
+QUERY_TOOL = {
+    "name": "query_shop_data",
+    "description": (
+        "ขอตัวเลขของร้านตามมุมที่ต้องการ ระบบคำนวณให้แล้วส่งกลับ "
+        "ใช้เมื่อคำถามต้องการตัวเลขที่ไม่มีอยู่ในข้อมูลที่ให้ไว้แล้ว "
+        "เช่น แบ่งตามวันในสัปดาห์ ตามเดือน ตามเมนู ตามช่องทาง หรือช่วงเวลาอื่น"),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "dataset": {"type": "string", "enum": ["sales", "expenses"]},
+            "from_date": {"type": "string", "description": "YYYY-MM-DD"},
+            "to_date": {"type": "string", "description": "YYYY-MM-DD"},
+            "group_by": {"type": "string",
+                         "enum": ["day", "weekday", "month", "menu", "channel",
+                                  "category", "name", "none"]},
+            "metrics": {"type": "array", "items": {"type": "string"}},
+            "filter_channel": {"type": "string"},
+            "filter_category": {"type": "string"},
+            "sort": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["group_by", "metrics"],
+    },
+}
+
+# Enough to look at one thing and then follow it up. Past that a model is
+# usually circling rather than converging, and every round is a request.
+MAX_TOOL_ROUNDS = 3
+
+
+def tool_args_to_spec(args: dict) -> dict:
+    """The flat tool arguments, back into the shape shop_query validates.
+
+    Declared flat rather than as one nested "spec" object because nested
+    schemas are where function-calling declarations most often go wrong,
+    and nothing is lost by flattening them here.
+    """
+    args = args or {}
+    filters = {}
+    if args.get("filter_channel"):
+        filters["channel"] = args["filter_channel"]
+    if args.get("filter_category"):
+        filters["category"] = args["filter_category"]
+    return {k: v for k, v in {
+        "dataset": args.get("dataset"),
+        "from": args.get("from_date"),
+        "to": args.get("to_date"),
+        "group_by": args.get("group_by"),
+        "metrics": args.get("metrics"),
+        "filter": filters or None,
+        "sort": args.get("sort"),
+        "limit": args.get("limit"),
+    }.items() if v is not None}
+
+
+def _record(run_tool, seen: list):
+    """Keeps every query result, which is what makes them verifiable."""
+    def call(name, args):
+        result = run_tool(name, args)
+        seen.append(result)
+        return result
+    return call
+
+
 def answer(provider, context: dict, question: str,
-           previous_questions: list[str] | None = None) -> dict:
+           previous_questions: list[str] | None = None,
+           run_tool=None) -> dict:
     """Ask one question and report what came back, with its warnings.
 
     Never raises for a provider failure: the caller has a screen to
@@ -489,6 +554,7 @@ def answer(provider, context: dict, question: str,
         return {"ok": False,
                 "error": f"คำถามยาวเกินไป (เกิน {MAX_QUESTION_LENGTH} ตัวอักษร)"}
 
+    seen: list[dict] = []
     try:
         # Previous questions help resolve follow-ups such as "แล้วเมนูนั้นล่ะ".
         # Old answers are excluded: an unverified number from an old answer
@@ -501,15 +567,25 @@ def answer(provider, context: dict, question: str,
                 "previous_questions_only": history,
                 "note": "ใช้เพื่อเข้าใจคำถามต่อเนื่องเท่านั้น ไม่ใช่ข้อมูลตัวเลขของร้าน",
             }}
-        text = provider.ask(INSTRUCTIONS, model_context, question)
+        if run_tool is None:
+            text = provider.ask(INSTRUCTIONS, model_context, question)
+        else:
+            text = provider.converse(INSTRUCTIONS, model_context, question,
+                                     [QUERY_TOOL], _record(run_tool, seen))
     except Exception as e:
         return {"ok": False, "error": str(e) or "ผู้ช่วยตอบไม่ได้ตอนนี้"}
 
-    # Verify against shop facts only, never against numbers a person may have
-    # typed in a previous question.
-    unsupported = verify_numbers(text, context)
+    # Verified against the shop facts AND against what the queries returned:
+    # every figure a query hands back was computed by Python, so it is a
+    # shop fact too, and an answer built from one would otherwise be
+    # flagged for every number in it. Never against numbers a person typed
+    # in an earlier question.
+    unsupported = verify_numbers(text, {"facts": context, "queried": seen})
     return {
         "ok": True,
+        # What it went and looked at - so the person can see the answer was
+        # built on something, and on what.
+        "queries": [q.get("spec") for q in seen if isinstance(q, dict)],
         "answer": text.strip(),
         # Shown to the reader, not swallowed. An answer carrying a figure
         # the data cannot account for is still worth reading - it is just

@@ -415,6 +415,21 @@ export default function Assistant() {
             </p>
           ))}
 
+          {/* What it went and looked up. Shown because "where did this
+              number come from" is the question a shop owner asks of any
+              figure they did not add up themselves, and the honest answer
+              is short enough to print. An answer with nothing listed here
+              was given from the summary already on screen, or from general
+              knowledge - which the answer itself has to say. */}
+          {result.queries?.length > 0 && (
+            <p style={{
+              marginTop: 12, paddingTop: 11, borderTop: '1px solid var(--border)',
+              fontSize: 12, color: 'var(--text-muted)',
+            }}>
+              ดูจาก: {result.queries.map(describeQuery).join(' · ')}
+            </p>
+          )}
+
           {/* Not hidden. A figure the data cannot account for is still
               worth reading - it is just not worth acting on without
               checking, and only the person reading can be told that. */}
@@ -456,6 +471,28 @@ export default function Assistant() {
       )}
     </div>
   );
+}
+
+const GROUP_LABELS = {
+  day: 'รายวัน', weekday: 'ตามวันในสัปดาห์', month: 'รายเดือน',
+  menu: 'ตามเมนู', channel: 'ตามช่องทาง', category: 'ตามหมวด',
+  name: 'ตามรายการ', none: 'ยอดรวม',
+};
+
+const METRIC_LABELS = {
+  sales: 'ยอดขาย', bills: 'จำนวนบิล', qty: 'จำนวนที่ขาย', avg_bill: 'เฉลี่ยต่อบิล',
+  ingredient_cost: 'ต้นทุนวัตถุดิบ', gross_profit: 'กำไรขั้นต้น',
+  gross_margin_pct: 'อัตรากำไร', amount: 'ยอดเงิน', count: 'จำนวนรายการ',
+};
+
+/** One query, in words - not JSON. The reader is a cook, not a developer. */
+function describeQuery(q) {
+  if (!q) return '';
+  const what = (q.metrics || []).map((m) => METRIC_LABELS[m] || m).join('/');
+  const how = GROUP_LABELS[q.group_by] || q.group_by;
+  const where = q.filter?.channel ? ` เฉพาะ${q.filter.channel}` : '';
+  const when = q.from && q.to ? ` ${q.from} ถึง ${q.to}` : '';
+  return `${what} ${how}${where}${when}`.trim();
 }
 
 const dateStyle = {
