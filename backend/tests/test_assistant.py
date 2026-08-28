@@ -275,7 +275,13 @@ def test_the_port_holds_its_shape():
         print("  [PASS] the port cannot be used without implementing it")
 
     check("the rules forbid the arithmetic the snapshot already did",
-          "ห้ามคิดเลขเอง" in assistant.INSTRUCTIONS, True)
+          "ห้ามบวก ลบ คูณ หาร" in assistant.INSTRUCTIONS, True)
+    check("a dead end has to say what would answer it, not just 'no data'",
+          "ต้องบันทึกอะไรเพิ่ม" in assistant.INSTRUCTIONS, True)
+    check("and an opinion may not carry a figure about this shop",
+          "ห้ามมีตัวเลขที่บรรยายร้านนี้" in assistant.INSTRUCTIONS, True)
+    check("the analysis is evidence, not a template to fill in",
+          "ไม่ใช่โครงคำตอบ" in assistant.INSTRUCTIONS, True)
     check("and require the caveats to be volunteered",
           "caveats" in assistant.INSTRUCTIONS, True)
     check("the model is explicitly read-only",

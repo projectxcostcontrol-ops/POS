@@ -50,12 +50,40 @@ def analyze(question: str, current: dict, previous: dict | None = None) -> dict:
     return {
         "intent": intent,
         "intent_label": INTENT_LABELS[intent],
-        "response_contract": {
-            "order": ["conclusion", "evidence", "missing_data",
-                      "confidence", "next_action", "limitation"],
-            "instruction": "ตอบข้อสรุปก่อน ใช้เฉพาะหลักฐานที่ให้ และกล่าวเฉพาะข้อมูลขาดที่เกี่ยวข้องกับคำถาม",
-        },
+        # Everything build_deep_analysis worked out, not just the two intents
+        # that used to consume it. It was being computed on every question
+        # and thrown away, which is why the assistant could only ever repeat
+        # the figures already on the cards: the answers to "which menu is
+        # slipping" and "which one earns least" existed the whole time and
+        # never left the server.
+        "analysis": _analysis_for_model(deep),
         **result,
+    }
+
+
+def _analysis_for_model(deep: dict) -> dict:
+    """The rankings, without repeating the menu rows they were drawn from.
+
+    Each menu already travels once in menus.performance. Sending the full
+    row again inside every ranking would triple the payload and put the
+    same figure in front of the model three times, which is an invitation
+    to quote whichever copy it happened to read.
+    """
+    def rank(rows, field):
+        return [{"name": r.get("name"), field: r.get(field)}
+                for r in (rows or [])[:3] if r.get("name")]
+
+    menus = deep.get("menus") or {}
+    return {
+        "period_changes": deep.get("period_changes"),
+        "signals": deep.get("signals") or [],
+        "lowest_margin_menus": rank(menus.get("lowest_margin"), "gross_margin_pct"),
+        "biggest_gross_profit_menus": rank(menus.get("biggest_gross_profit"),
+                                           "gross_profit"),
+        "menus_selling_less_than_before": rank(menus.get("revenue_declines"),
+                                               "revenue_change_baht"),
+        "uncosted_menus": (menus.get("uncosted") or [])[:8],
+        "method": deep.get("method"),
     }
 
 
