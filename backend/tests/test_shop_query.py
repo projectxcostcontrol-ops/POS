@@ -219,6 +219,39 @@ def test_expenses_are_their_own_shape():
           [r["group"] for r in months["rows"]], ["2026-07", "2026-08"])
 
 
+def test_hours_of_the_day_and_the_days_that_predate_them():
+    section("Hours of the day, and the days that predate them")
+
+    hours = run(group_by="hour", metrics=["sales", "bills"], sort="sales")
+    # 05:00 and 06:00 and 07:00 UTC are midday, one and two in Bangkok.
+    check("bills gather into the hour they were rung up, on the shop's clock",
+          {r["group"]: r["sales"] for r in hours["rows"]},
+          {"12:00": 200 + 300 + 400, "13:00": 100, "14:00": 150})
+    check("and add up to the day's takings", hours["totals"]["sales"], 1150)
+
+    # A day summarised before the rollup kept hours has no `hours` key.
+    # Counting it as an hour with nothing in it would make a day nobody
+    # recorded look exactly like a day the shop was quiet.
+    old = [{k: v for k, v in r.items() if k != "hours"} for r in rollups()]
+    blank = query.run({"group_by": "hour", "metrics": ["sales"]}, rollups=old)
+    check("days from before are not read as empty hours", blank["rows"], [])
+    check("they are explained instead",
+          "ก่อนที่ระบบจะเริ่มเก็บเวลารายชั่วโมง" in (blank["note"] or ""), True)
+
+    mixed = query.run({"group_by": "hour", "metrics": ["sales"]},
+                      rollups=old[:1] + rollups()[1:])
+    check("a mix says how many days it could actually use",
+          "1 วัน" in (mixed["note"] or ""), True)
+
+    refuses("an hour does not know which menu it sold",
+            {"group_by": "hour", "metrics": ["gross_profit"]},
+            "ไม่ได้เก็บว่าชั่วโมงไหนขายเมนูอะไร")
+    per_channel = run(group_by="hour", metrics=["sales"], filter={"channel": "grab"})
+    check("nor which channel", per_channel["rows"], [])
+    check("and says so",
+          "แต่ละช่องทางขายตอนกี่โมง" in (per_channel["note"] or ""), True)
+
+
 def test_the_schema_tells_the_model_what_is_missing():
     section("The schema tells the model what is missing")
 
@@ -228,7 +261,6 @@ def test_the_schema_tells_the_model_what_is_missing():
     missing = " ".join(schema["ไม่ได้เก็บไว้"])
     # Naming the gaps is what turns "there is no data" into "this is not
     # recorded, and here is what to record".
-    check("time of day is named as missing", "กี่โมง" in missing, True)
     check("and the menu-by-channel gap the engine refuses on",
           "เมนูแยกตามช่องทาง" in missing, True)
 
@@ -261,6 +293,7 @@ def main():
     test_what_it_refuses_rather_than_answers_with_something_near()
     test_a_total_that_is_actually_the_total()
     test_expenses_are_their_own_shape()
+    test_hours_of_the_day_and_the_days_that_predate_them()
     test_the_schema_tells_the_model_what_is_missing()
 
     passed = sum(1 for r in _results if r)

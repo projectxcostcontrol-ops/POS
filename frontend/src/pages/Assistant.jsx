@@ -474,7 +474,7 @@ export default function Assistant() {
 }
 
 const GROUP_LABELS = {
-  day: 'รายวัน', weekday: 'ตามวันในสัปดาห์', month: 'รายเดือน',
+  day: 'รายวัน', weekday: 'ตามวันในสัปดาห์', month: 'รายเดือน', hour: 'ตามชั่วโมง',
   menu: 'ตามเมนู', channel: 'ตามช่องทาง', category: 'ตามหมวด',
   name: 'ตามรายการ', none: 'ยอดรวม',
 };

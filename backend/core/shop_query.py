@@ -46,7 +46,7 @@ THAI_WEEKDAYS = ("จันทร์", "อังคาร", "พุธ", "พ�
 # because a silently dropped filter turns "Grab only" into "everything".
 DATASETS = {
     "sales": {
-        "group_by": ("day", "weekday", "month", "menu", "channel", "none"),
+        "group_by": ("day", "weekday", "month", "hour", "menu", "channel", "none"),
         "metrics": ("sales", "bills", "qty", "avg_bill",
                     "ingredient_cost", "gross_profit", "gross_margin_pct"),
         "filter": ("channel",),
@@ -85,6 +85,9 @@ def describe(expense_names: list[str] | None = None) -> dict:
             "sales": {
                 "คือ": "บิลขายทั้งหมด รวมออเดอร์นอกร้าน แยกตามวันของร้าน",
                 "group_by": list(DATASETS["sales"]["group_by"]),
+                "หมายเหตุเรื่อง hour": "แบ่งตามชั่วโมงได้ตามเวลาร้าน "
+                                       "แต่วันที่สรุปไว้ก่อนระบบเริ่มเก็บเวลาจะไม่มีข้อมูลนี้ "
+                                       "ผลลัพธ์จะบอกเองว่ามาจากกี่วัน",
                 "metrics": list(DATASETS["sales"]["metrics"]),
                 "filter": {"channel": "loyverse | grab | lineman | shopeefood | "
                                       "phone | online_menu | walk_in | other"},
@@ -106,7 +109,6 @@ def describe(expense_names: list[str] | None = None) -> dict:
                  "group_by": "weekday", "metrics": ["sales", "bills"],
                  "filter": {"channel": "grab"}, "sort": "sales", "limit": 10},
         "ไม่ได้เก็บไว้": [
-            "เวลาในวัน (กี่โมงขายดี) - rollup เก็บเป็นรายวัน",
             "ข้อมูลลูกค้า พนักงาน โต๊ะ",
             "เมนูแยกตามช่องทาง (รู้ยอดรวมของแต่ละช่องทาง แต่ไม่รู้ว่าช่องทางนั้นขายเมนูไหน)",
         ],
@@ -168,6 +170,12 @@ def clean_spec(spec: dict) -> dict:
         if blocked:
             raise QueryError(
                 f"แบ่งตามช่องทางแล้วดู {blocked} ไม่ได้ - ได้แค่ sales, bills, avg_bill")
+    if dataset == "sales" and group_by == "hour":
+        blocked = [m for m in metrics if m not in ("sales", "bills", "avg_bill")]
+        if blocked:
+            raise QueryError(
+                f"แบ่งตามชั่วโมงแล้วดู {blocked} ไม่ได้ "
+                f"เพราะไม่ได้เก็บว่าชั่วโมงไหนขายเมนูอะไร - ได้แค่ sales, bills, avg_bill")
     if dataset == "sales" and group_by != "menu" and "qty" in metrics:
         raise QueryError("qty ดูได้เฉพาะตอนแบ่งกลุ่มตามเมนู")
     if dataset == "sales" and group_by == "menu":
@@ -251,6 +259,9 @@ def _sales(spec: dict, rollups: list[dict], recipes: dict,
         return [{"group": src, **_basic(v["sales"], v["bills"], spec["metrics"])}
                 for src, v in tally.items()], None
 
+    if spec["group_by"] == "hour":
+        return _hours(rows, channel, spec["metrics"])
+
     buckets: dict[str, dict] = {}
     for row in rows:
         key = _bucket(row.get("date"), spec["group_by"])
@@ -279,6 +290,41 @@ def _sales(spec: dict, rollups: list[dict], recipes: dict,
     if channel:
         note = "กรองเฉพาะช่องทางนี้ จึงดูได้แค่ยอดขายกับจำนวนบิล"
     return out, note
+
+
+def _hours(rows: list[dict], channel: str | None,
+           wanted) -> tuple[list[dict], str | None]:
+    """Takings by hour of the shop's clock.
+
+    Days summarised before the rollup started keeping hours have no
+    `hours` key at all, and they are counted and reported rather than
+    treated as hours with nothing in them. A quiet Tuesday and a Tuesday
+    nobody recorded look identical in a bar chart, and only one of them
+    means the shop was quiet.
+    """
+    if channel:
+        return [], ("ไม่ได้เก็บว่าแต่ละช่องทางขายตอนกี่โมง "
+                    "จึงดูรายชั่วโมงแยกตามช่องทางไม่ได้")
+
+    covered = [r for r in rows if isinstance(r.get("hours"), dict)]
+    missing = len(rows) - len(covered)
+    if not covered:
+        return [], ("วันในช่วงนี้สรุปไว้ก่อนที่ระบบจะเริ่มเก็บเวลารายชั่วโมง "
+                    "จึงยังดูไม่ได้ - วันที่สรุปหลังจากนี้จะมีข้อมูลนี้")
+
+    tally: dict[str, dict] = {}
+    for row in covered:
+        for hour, slot in row["hours"].items():
+            acc = tally.setdefault(hour, {"sales": 0.0, "bills": 0})
+            acc["sales"] += slot.get("total") or 0
+            acc["bills"] += slot.get("count") or 0
+
+    note = None
+    if missing:
+        note = (f"อีก {missing} วันในช่วงนี้สรุปไว้ก่อนระบบเริ่มเก็บเวลารายชั่วโมง "
+                f"ตัวเลขนี้จึงมาจาก {len(covered)} วันเท่านั้น")
+    return [{"group": f"{h}:00", **_basic(v["sales"], v["bills"], wanted)}
+            for h, v in tally.items()], note
 
 
 def _menu_metrics(menu: dict, wanted) -> dict:

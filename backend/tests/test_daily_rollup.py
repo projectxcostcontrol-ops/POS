@@ -189,7 +189,7 @@ def test_a_days_facts():
     check("a day the shop was closed is a stored zero, not an absence",
           roll.empty("2026-08-06"),
           {"date": "2026-08-06", "total": 0.0, "bill_count": 0,
-           "refund_count": 0, "by_source": {}, "items": {}})
+           "refund_count": 0, "by_source": {}, "items": {}, "hours": {}})
     check("summarising nothing is zero, not a crash",
           roll.summarise([roll.empty("2026-08-06")], RECIPES, MATERIALS)["total"], 0)
 
@@ -494,6 +494,36 @@ def test_an_ordinary_sync_does_not_write_to_clear_today():
     check("a sync of today's bills clears nothing", cleared, [])
 
 
+def test_hours_follow_the_shops_clock_too():
+    section("Hours follow the shop's clock too")
+
+    check("an evening service is an evening hour, not the small hours",
+          roll.local_hour("2026-08-03T12:30:00.000Z", BKK), "19")
+    check("and midday is midday", roll.local_hour("2026-08-03T05:00:00.000Z", BKK), "12")
+    check("a shop at UTC is unshifted",
+          roll.local_hour("2026-08-03T12:30:00.000Z", 0), "12")
+    check("an unreadable timestamp is refused, not guessed",
+          roll.local_hour("not a time", BKK), None)
+
+    day = roll.build_many([
+        sale("2026-08-03T12:30:00.000Z", 100, []),
+        sale("2026-08-03T13:10:00.000Z", 200, []),
+        sale("2026-08-03T13:40:00.000Z", 50, []),
+    ], BKK)["2026-08-03"]
+    check("bills gather into their hour",
+          day["hours"], {"19": {"total": 100.0, "count": 1},
+                         "20": {"total": 250.0, "count": 2}})
+    check("the hours add up to the day",
+          round(sum(h["total"] for h in day["hours"].values()), 2), day["total"])
+    # Ten or twelve open hours, not twenty-four slots of which half say zero.
+    check("closed hours are absent rather than stored as zeros",
+          len(day["hours"]), 2)
+
+    check("a day the shop sold nothing has the key, and it is empty - "
+          "which is a different thing from not having the key at all",
+          roll.empty("2026-08-06")["hours"], {})
+
+
 def main():
     print("Daily rollup")
     print("=" * 50)
@@ -503,6 +533,7 @@ def main():
     test_a_days_facts()
     test_a_corrected_price_moves_the_past_on_its_own()
     test_the_list_and_the_chart_agree()
+    test_hours_follow_the_shops_clock_too()
     test_a_month_is_read_as_a_month_of_rows()
     test_today_is_never_stored()
     test_a_closed_day_is_a_stored_zero()

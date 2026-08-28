@@ -47,6 +47,25 @@ def local_day(iso: str, tz_offset_minutes: int) -> str | None:
             + timedelta(minutes=tz_offset_minutes)).strftime("%Y-%m-%d")
 
 
+def local_hour(iso: str, tz_offset_minutes: int) -> str | None:
+    """The hour on the shop's clock, as "00".."23".
+
+    Local for the same reason the day is: an evening service in Bangkok
+    is the small hours in UTC, so a chart of when the shop is busy would
+    otherwise show it busiest at midnight.
+    """
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (dt.astimezone(timezone.utc)
+            + timedelta(minutes=tz_offset_minutes)).strftime("%H")
+
+
 def day_bounds(day: str, tz_offset_minutes: int) -> tuple[str, str]:
     """The UTC instants that bracket one of the shop's days.
 
@@ -79,11 +98,19 @@ def empty(day: str) -> dict:
     on every visit to a month that contains a Sunday it was closed.
     """
     return {"date": day, "total": 0.0, "bill_count": 0, "refund_count": 0,
-            "by_source": {}, "items": {}}
+            "by_source": {}, "items": {}, "hours": {}}
 
 
-def build(day: str, sales: list[dict]) -> dict:
-    """One day's facts, from that day's bills."""
+def build(day: str, sales: list[dict], tz_offset_minutes: int = 0) -> dict:
+    """One day's facts, from that day's bills.
+
+    Sparse hours rather than twenty-four slots: a shop is open ten or
+    twelve hours, and a row of zeros for the hours it was shut is storage
+    spent to say nothing. An hour that is absent means nothing was rung
+    up then - which is only true for a row that HAS the key at all, and
+    that distinction is what keeps a day summarised before this existed
+    from reading as a day the shop never opened (see shop_query).
+    """
     row = empty(day)
     for sale in sales:
         total = sale.get("total") or 0
@@ -102,6 +129,12 @@ def build(day: str, sales: list[dict]) -> dict:
         bucket["total"] += total
         bucket["count"] += 1
 
+        hour = local_hour(sale.get("date") or "", tz_offset_minutes)
+        if hour:
+            slot = row["hours"].setdefault(hour, {"total": 0.0, "count": 0})
+            slot["total"] += total
+            slot["count"] += 1
+
         for item in sale.get("items", []):
             name = item.get("name") or ""
             if not name:
@@ -114,6 +147,8 @@ def build(day: str, sales: list[dict]) -> dict:
     row["total"] = round(row["total"], 2)
     for bucket in row["by_source"].values():
         bucket["total"] = round(bucket["total"], 2)
+    for slot in row["hours"].values():
+        slot["total"] = round(slot["total"], 2)
     for entry in row["items"].values():
         entry["revenue"] = round(entry["revenue"], 2)
     return row
@@ -126,7 +161,8 @@ def build_many(sales: list[dict], tz_offset_minutes: int) -> dict[str, dict]:
         day = local_day(sale.get("date") or "", tz_offset_minutes)
         if day:
             by_day.setdefault(day, []).append(sale)
-    return {day: build(day, rows) for day, rows in by_day.items()}
+    return {day: build(day, rows, tz_offset_minutes)
+            for day, rows in by_day.items()}
 
 
 def summarise(rollups: list[dict], recipes: dict, materials: list[dict]) -> dict:
