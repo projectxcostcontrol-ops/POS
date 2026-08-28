@@ -65,11 +65,17 @@ class QueryError(ValueError):
     """A spec that cannot be answered, with the reason the model is shown."""
 
 
-def describe() -> dict:
+def describe(expense_names: list[str] | None = None) -> dict:
     """What the model is told it can ask for.
 
     Sent with every question. It is the schema, not the data - a few
     hundred characters that replace guessing.
+
+    `expense_names` is the one place real data leaks into the schema, and
+    it earns its place: an expense is whatever the owner typed, so
+    "which line is the delivery commission" cannot be answered from a
+    field name. Showing the names that actually exist turns a guess into
+    a lookup, and they were already fetched for the period.
     """
     return {
         "how_it_works": (
@@ -84,10 +90,16 @@ def describe() -> dict:
                                       "phone | online_menu | walk_in | other"},
             },
             "expenses": {
-                "คือ": "รายจ่ายที่บันทึกเอง (ไม่รวมค่าวัตถุดิบที่มาจากใบรับของ)",
+                "คือ": "รายจ่ายที่เจ้าของร้านบันทึกเอง เช่น ค่าเช่า ค่าไฟ ค่าแรง "
+                       "**และค่าคอมของแอปเดลิเวอรี** (ไม่รวมค่าวัตถุดิบ "
+                       "ซึ่งมาจากใบรับของโดยอัตโนมัติ)",
                 "group_by": list(DATASETS["expenses"]["group_by"]),
                 "metrics": list(DATASETS["expenses"]["metrics"]),
                 "filter": {"category": "fixed | variable"},
+                "ชื่อรายการที่มีอยู่จริงในช่วงนี้": sorted(set(expense_names or [])),
+                "หมายเหตุ": "รายจ่ายเป็นชื่อที่เจ้าของร้านพิมพ์เอง ไม่ได้ผูกกับช่องทางขาย "
+                            "ถ้าจะดูค่าคอมของช่องทางไหน ให้หาจากชื่อรายการ "
+                            "และบอกผู้ใช้ด้วยว่าจับคู่จากชื่อ",
             },
         },
         "spec": {"dataset": "sales", "from": "2026-07-01", "to": "2026-07-31",
@@ -95,9 +107,13 @@ def describe() -> dict:
                  "filter": {"channel": "grab"}, "sort": "sales", "limit": 10},
         "ไม่ได้เก็บไว้": [
             "เวลาในวัน (กี่โมงขายดี) - rollup เก็บเป็นรายวัน",
-            "ค่าคอมของแอปเดลิเวอรี",
             "ข้อมูลลูกค้า พนักงาน โต๊ะ",
             "เมนูแยกตามช่องทาง (รู้ยอดรวมของแต่ละช่องทาง แต่ไม่รู้ว่าช่องทางนั้นขายเมนูไหน)",
+        ],
+        "ตอบได้แต่ต้องประกอบสองฝั่ง": [
+            "กำไรของช่องทางเดลิเวอรี = ยอดขายของช่องทางนั้น (dataset sales, "
+            "filter channel) กับค่าคอมที่บันทึกไว้ (dataset expenses, หาจากชื่อรายการ) "
+            "- ให้ยกมาทั้งสองตัวเลข อย่าลบเอง และบอกว่าจับคู่ค่าคอมจากชื่อรายการ",
         ],
     }
 

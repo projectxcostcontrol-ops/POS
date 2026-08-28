@@ -1425,8 +1425,10 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
     recipes = c.store.all_recipes(store_id)
     materials = c.store.list_materials(store_id)
 
+    period_expenses = c.store.list_expenses(store_id, start=first, end=last)
     current, rollups = _period_snapshot(c, store_id, first, last, tz, today,
-                                        recipes, materials)
+                                        recipes, materials,
+                                        expenses=period_expenses)
     # The period immediately before, of the same length, so "เทียบกับช่วง
     # ก่อนหน้า" is answerable without a second request.
     prev_last = _shift_day(first, -1)
@@ -1449,7 +1451,11 @@ def assistant_ask(store_id: str, data: dict, c: Ctx = Depends(store_money)):
     # just as usefully, what the shop does not record at all. That list is
     # what turns "ไม่มีข้อมูล" into "this is not recorded; here is what to
     # start recording."
-    context["data_available"] = shop_query.describe()
+    context["data_available"] = shop_query.describe(
+        # The names that actually exist. An expense is whatever the owner
+        # typed, so "which line is the Grab commission" is a lookup among
+        # these rather than something a field name can answer.
+        expense_names=[e.get("name") for e in period_expenses if e.get("name")])
 
     history = data.get("previous_questions") or []
     if not isinstance(history, list):
@@ -1666,8 +1672,8 @@ def _query_window(spec: dict, default_first: str,
 
 
 def _period_snapshot(c: Ctx, store_id: str, first: str, last: str, tz: int,
-                     today: str, recipes: dict,
-                     materials: list[dict]) -> tuple[dict, list[dict]]:
+                     today: str, recipes: dict, materials: list[dict],
+                     expenses: list[dict] | None = None) -> tuple[dict, list[dict]]:
     rollups = daily_rollup.ensure_daily(c.store, store_id, first, last, tz, today)
     snapshot = assistant_lib.build_snapshot(
         branch=store_id,
@@ -1675,8 +1681,10 @@ def _period_snapshot(c: Ctx, store_id: str, first: str, last: str, tz: int,
         recipes=recipes,
         materials=materials,
         # Ranged rather than fetched-and-filtered. This used to read every
-        # expense the shop had ever recorded, twice per question.
-        expenses=c.store.list_expenses(store_id, start=first, end=last),
+        # expense the shop had ever recorded, twice per question. Passed in
+        # when the caller already has them, so one period is read once.
+        expenses=(c.store.list_expenses(store_id, start=first, end=last)
+                  if expenses is None else expenses),
         receivings=c.store.list_receivings(store_id, first, last),
         period_from=first, period_to=last, today=today)
     return snapshot, rollups

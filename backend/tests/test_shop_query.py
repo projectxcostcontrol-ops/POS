@@ -229,9 +229,28 @@ def test_the_schema_tells_the_model_what_is_missing():
     # Naming the gaps is what turns "there is no data" into "this is not
     # recorded, and here is what to record".
     check("time of day is named as missing", "กี่โมง" in missing, True)
-    check("so is the delivery commission", "ค่าคอม" in missing, True)
     check("and the menu-by-channel gap the engine refuses on",
           "เมนูแยกตามช่องทาง" in missing, True)
+
+    # The delivery commission IS recorded - as an ordinary expense the
+    # owner types in. Listing it as missing would have had the assistant
+    # telling shops their own bookkeeping does not exist.
+    check("the delivery commission is NOT listed as missing",
+          "ค่าคอม" in missing, False)
+    check("the expenses dataset says it holds it",
+          "ค่าคอม" in schema["datasets"]["expenses"]["คือ"], True)
+    check("with the two-sided answer spelled out, since neither dataset "
+          "alone holds a channel's profit",
+          any("กำไรของช่องทางเดลิเวอรี" in line
+              for line in schema["ตอบได้แต่ต้องประกอบสองฝั่ง"]), True)
+
+    named = query.describe(expense_names=["ค่าเช่า", "ค่าคอม Grab", "ค่าเช่า"])
+    check("the names that actually exist are shown, because an expense is "
+          "whatever the owner typed and no field name can find it",
+          named["datasets"]["expenses"]["ชื่อรายการที่มีอยู่จริงในช่วงนี้"],
+          ["ค่าคอม Grab", "ค่าเช่า"])
+    check("and the model is told the pairing is by name, so it can say so",
+          "จับคู่จากชื่อ" in named["datasets"]["expenses"]["หมายเหตุ"], True)
 
 
 def main():
