@@ -25,6 +25,7 @@ export default function Recipes() {
   const [rows, setRows] = useState([]);
   const [suggesting, setSuggesting] = useState(null);
   const [error, setError] = useState('');
+  const [salesItems, setSalesItems] = useState([]);
 
   useEffect(() => {
     if (!storeId) return;
@@ -39,6 +40,10 @@ export default function Recipes() {
     api.suggestStatus(storeId).then((s) => setAiAvailable(s.available)).catch(() => setAiAvailable(false));
     refreshDrafts();
     api.listRecipeSkips(storeId).then(setSkips).catch(() => setSkips([]));
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    api.getSalesOverview(storeId, start.toISOString(), now.toISOString(), 'day', 0, false)
+      .then((s) => setSalesItems(s.top_items || [])).catch(() => setSalesItems([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storeId]);
 
@@ -121,6 +126,8 @@ export default function Recipes() {
 
   const incompleteRows = rows.filter(
     (r) => !r.material_id || r.qty === '' || r.qty === null || Number(r.qty) <= 0).length;
+  const selectedIds = rows.map((r) => r.material_id).filter(Boolean);
+  const duplicateRows = selectedIds.length - new Set(selectedIds).size;
 
   async function saveRecipe() {
     const payload = rows.map((r) => ({ material_id: r.material_id, qty: Number(r.qty) }));
@@ -131,6 +138,16 @@ export default function Recipes() {
   }
 
   const draftCount = Object.keys(drafts).length;
+  const coveredNames = new Set([
+    ...Object.entries(recipeMap).filter(([, recipe]) => recipe?.length).map(([name]) => name),
+    ...skips,
+  ]);
+  const totalRevenue = salesItems.reduce((sum, row) => sum + (Number(row.revenue) || 0), 0);
+  const coveredRevenue = salesItems.reduce((sum, row) =>
+    sum + (coveredNames.has(row.name) ? (Number(row.revenue) || 0) : 0), 0);
+  const coveragePct = totalRevenue > 0 ? Math.round((coveredRevenue / totalRevenue) * 100) : 0;
+  const completedCount = items.filter((it) => coveredNames.has(it.name)).length;
+  const priorityMissing = salesItems.filter((row) => !coveredNames.has(row.name)).slice(0, 3);
 
   return (
     <div>
@@ -140,6 +157,30 @@ export default function Recipes() {
       </p>
 
       {error && <p style={{ fontSize: 12, color: 'var(--text-danger)', marginBottom: 12 }}>{error}</p>}
+
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+          <div>
+            <p style={{ fontSize: 13.5, fontWeight: 600, margin: 0 }}>ความครบของสูตรเดือนนี้</p>
+            <p style={{ fontSize: 11.5, color: 'var(--text-muted)', margin: '3px 0 0' }}>
+              ผูกแล้ว {completedCount} จาก {items.length} เมนู · วัดตามยอดขายที่คำนวณต้นทุนได้
+            </p>
+          </div>
+          <span style={{ fontSize: 22, fontWeight: 700,
+            color: coveragePct >= 90 ? 'var(--text-success)' : 'var(--text-warning)' }}>
+            {coveragePct}%
+          </span>
+        </div>
+        <div style={{ height: 7, background: 'var(--surface-1)', borderRadius: 99, overflow: 'hidden', marginTop: 10 }}>
+          <div style={{ width: `${coveragePct}%`, height: '100%', borderRadius: 99,
+            background: coveragePct >= 90 ? 'var(--text-success)' : 'var(--text-warning)' }} />
+        </div>
+        {priorityMissing.length > 0 && (
+          <p style={{ fontSize: 11.5, color: 'var(--text-secondary)', margin: '9px 0 0' }}>
+            ควรเริ่มจากเมนูขายดี: {priorityMissing.map((row) => row.name).join(', ')}
+          </p>
+        )}
+      </div>
 
       {draftCount > 0 && (
         <div style={{
@@ -295,6 +336,11 @@ export default function Recipes() {
                 ⚠ ยังกรอกไม่ครบ {incompleteRows} รายการ (ต้องเลือกวัตถุดิบและใส่ปริมาณมากกว่า 0)
               </p>
             )}
+            {duplicateRows > 0 && (
+              <p style={{ fontSize: 11, color: 'var(--text-warning)', margin: '8px 0 0' }}>
+                ⚠ มีวัตถุดิบซ้ำ กรุณารวมปริมาณเป็นรายการเดียว
+              </p>
+            )}
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', marginTop: 16 }}>
               {editingItem.from === 'ai' ? (
@@ -306,7 +352,7 @@ export default function Recipes() {
               <div style={{ display: 'flex', gap: 8 }}>
                 <button onClick={() => setEditingItem(null)}>ยกเลิก</button>
                 <button style={{ background: 'var(--surface-1)' }} onClick={saveRecipe}
-                  disabled={rows.length === 0 || incompleteRows > 0}>
+                  disabled={rows.length === 0 || incompleteRows > 0 || duplicateRows > 0}>
                   บันทึก
                 </button>
               </div>

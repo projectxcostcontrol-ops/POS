@@ -20,10 +20,12 @@ COUNT = "count"
 # base units: gram for weight, millilitre for volume, "1" for count
 UNITS = {
     "g": (WEIGHT, 1),
+    "hg": (WEIGHT, 100),
     "kg": (WEIGHT, 1000),
     "ml": (VOLUME, 1),
     "l": (VOLUME, 1000),
     "piece": (COUNT, 1),
+    "dozen": (COUNT, 12),
     "bottle": (COUNT, 1),
     "box": (COUNT, 1),
 }
@@ -31,11 +33,13 @@ UNITS = {
 # raw spelling (lowercased, whitespace-stripped) -> canonical unit
 ALIASES = {
     "g": "g", "gram": "g", "grams": "g", "กรัม": "g", "ก.": "g",
+    "hg": "hg", "ขีด": "hg",
     "kg": "kg", "kilogram": "kg", "kilograms": "kg", "กก.": "kg", "กก": "kg", "กิโล": "kg", "กิโลกรัม": "kg",
     "ml": "ml", "milliliter": "ml", "มล.": "ml", "มล": "ml", "ซีซี": "ml", "cc": "ml",
     "l": "l", "liter": "l", "litre": "l", "ลิตร": "l",
     "ea": "piece", "each": "piece", "pc": "piece", "pcs": "piece", "piece": "piece",
     "piece(s)": "piece", "ชิ้น": "piece", "อัน": "piece",
+    "dozen": "dozen", "โหล": "dozen",
     "bottle": "bottle", "bottles": "bottle", "btl": "bottle", "ขวด": "bottle",
     "box": "box", "boxes": "box", "กล่อง": "box", "ลัง": "box",
 }
@@ -86,6 +90,9 @@ def convert_quantity(qty: float, from_unit_raw: str, to_unit_raw: str) -> dict:
 
     family = UNITS[from_unit][0]
     if family == COUNT:
+        if {from_unit, to_unit}.issubset({"piece", "dozen"}):
+            factor = UNITS[from_unit][1] / UNITS[to_unit][1]
+            return {"status": "converted", "qty": qty * factor, "factor": factor}
         # same family but different spelling of a count unit (e.g. bottle
         # vs box) - these aren't numerically convertible, only identity is
         return {"status": "unconvertible",
@@ -123,3 +130,49 @@ def apply_unit_conversion(item: dict, target_unit: str) -> dict:
             "status": result["status"], "reason": result["reason"], "target_unit": target_unit,
         }
     return item
+
+
+def apply_material_conversion(item: dict, material: dict) -> dict:
+    """Apply a product-specific purchase-unit conversion when configured."""
+    target = str(material.get("unit") or "").strip()
+    purchase = str(material.get("purchase_unit") or target).strip()
+    source = str(item.get("unit") or "").strip()
+    source_norm = normalize_unit(source)
+    target_norm = normalize_unit(target)
+    purchase_norm = normalize_unit(purchase)
+
+    already_stock_unit = source == target or bool(source_norm and source_norm == target_norm)
+    is_purchase_unit = source == purchase or bool(source_norm and source_norm == purchase_norm)
+    factor = float(material.get("purchase_to_stock") or 1)
+
+    remembered = next((row for row in material.get("purchase_conversions") or []
+                       if str(row.get("label") or "").strip().lower() == source.lower()), None)
+    if not already_stock_unit and remembered:
+        factor = float(remembered.get("factor") or 0)
+        if factor > 0:
+            converted = dict(item)
+            converted["unit_conversion"] = {
+                "status": "converted", "factor": factor, "source": "remembered",
+                "original_qty": item.get("qty"), "original_unit": item.get("unit"),
+                "target_unit": target,
+            }
+            converted["qty"] = (item.get("qty") or 0) * factor
+            if item.get("price") is not None:
+                converted["price"] = item["price"] / factor
+            converted["unit"] = target
+            return converted
+
+    if not already_stock_unit and is_purchase_unit and factor > 0:
+        converted = dict(item)
+        converted["unit_conversion"] = {
+            "status": "converted", "factor": factor, "source": "material",
+            "original_qty": item.get("qty"), "original_unit": item.get("unit"),
+            "target_unit": target,
+        }
+        converted["qty"] = (item.get("qty") or 0) * factor
+        if item.get("price") is not None:
+            converted["price"] = item["price"] / factor
+        converted["unit"] = target
+        return converted
+
+    return apply_unit_conversion(item, target)

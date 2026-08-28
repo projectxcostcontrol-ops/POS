@@ -10,7 +10,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from core.unit_conversion import normalize_unit, convert_quantity, apply_unit_conversion
+from core.unit_conversion import (normalize_unit, convert_quantity,
+                                  apply_unit_conversion, apply_material_conversion)
 
 _results = []
 
@@ -50,6 +51,7 @@ def test_weight_conversion():
 
     result = convert_quantity(500, "g", "kg")
     check("500g -> 0.5kg", result["qty"], 0.5)
+    check("3ขีด -> 300g", convert_quantity(3, "ขีด", "กรัม")["qty"], 300)
 
 
 def test_volume_conversion():
@@ -78,6 +80,7 @@ def test_count_units_dont_guess():
 
     result = convert_quantity(1, "ขวด", "ชิ้น")
     check("refuses to convert ขวด->ชิ้น", result["status"], "unconvertible")
+    check("1โหล -> 12ชิ้น", convert_quantity(1, "โหล", "ชิ้น")["qty"], 12)
 
 
 def test_unrecognized_unit():
@@ -122,6 +125,16 @@ def test_apply_conversion_flags_unconvertible_without_blocking():
     check("item still has a name (not dropped)", converted["name"], "น้ำปลา")
 
 
+def test_material_purchase_unit_conversion():
+    section("A shop-defined purchase unit converts without guessing")
+    item = {"name": "ข้าวสาร", "qty": 2, "unit": "ถุง", "price": 750}
+    material = {"unit": "กรัม", "purchase_unit": "ถุง", "purchase_to_stock": 30000}
+    converted = apply_material_conversion(item, material)
+    check("two bags become grams", converted["qty"], 60000)
+    check("price is per gram", converted["price"], 0.025)
+    check("custom source is recorded", converted["unit_conversion"]["source"], "material")
+
+
 def main():
     print("Running unit conversion tests (offline)")
 
@@ -135,6 +148,7 @@ def main():
     test_apply_conversion_updates_price_correctly()
     test_apply_conversion_same_unit_untouched()
     test_apply_conversion_flags_unconvertible_without_blocking()
+    test_material_purchase_unit_conversion()
 
     passed = sum(1 for r in _results if r)
     total = len(_results)

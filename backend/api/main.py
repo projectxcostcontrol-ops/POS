@@ -42,7 +42,7 @@ from core.expenses import clean_expense, ExpenseError
 from core.receiving import clean_receiving, normalize_date, ReceivingError
 from core.delivery import (CHANNELS, DeliveryError, clean_order,
                            is_pos_sale)
-from core.unit_conversion import apply_unit_conversion
+from core.unit_conversion import apply_material_conversion
 from storage.image_store import (upload_receipt_image, delete_receipt_image,
                                  download_receipt_image, storage_status)
 from core.auth import can, CAPABILITIES, OWNER, ROLES, is_super_admin
@@ -681,6 +681,12 @@ def list_stores(c: Ctx = Depends(ctx)):
     two accounts can easily hold a branch called "สาขา 1" and the person
     switching between them needs to be able to tell which is which.
     """
+    if os.environ.get("DEMO_MODE", "false").lower() == "true":
+        return [
+            {"id": "demo-branch-1", "name": "สาขาตลาด", "connection_id": "demo", "connection_label": "ข้อมูลจำลอง", "show_account": False},
+            {"id": "demo-branch-2", "name": "สาขาเมือง", "connection_id": "demo", "connection_label": "ข้อมูลจำลอง", "show_account": False},
+        ]
+
     branches, _ = c.branches()
     c.store.set_store_index({b["id"]: b["connection_id"] for b in branches})
 
@@ -695,6 +701,13 @@ def list_stores(c: Ctx = Depends(ctx)):
 @app.get("/api/{store_id}/items")
 def list_items(store_id: str, c: Ctx = Depends(store_ctx)):
     """Items come read-only from Loyverse; category assignment is ours."""
+    if os.environ.get("DEMO_MODE", "false").lower() == "true":
+        return [
+            {"id": "demo-rice-duck", "name": "ข้าวหน้าเป็ด", "category_id": None},
+            {"id": "demo-noodle-duck", "name": "บะหมี่เป็ด", "category_id": None},
+            {"id": "demo-rice-pork", "name": "ข้าวหมูกรอบ", "category_id": None},
+            {"id": "demo-two-toppings", "name": "ข้าวรวม 2 อย่าง", "category_id": None},
+        ]
     items = c.provider_for(store_id).get_items()
     assignments = c.store.get_item_categories(store_id)
     for item in items:
@@ -746,7 +759,8 @@ def list_materials(store_id: str, c: Ctx = Depends(store_ctx)):
 @app.put("/api/{store_id}/materials/{material_id}")
 def upsert_material(store_id: str, material_id: str, data: dict, c: Ctx = Depends(store_ctx)):
     try:
-        c.store.upsert_material(store_id, material_id, data)
+        from core.material_quality import validate_material
+        c.store.upsert_material(store_id, material_id, validate_material(data))
     except ValueError as e:
         # An id Firestore cannot use. A 400 saying so beats a 500 from
         # inside the SDK, which names neither the material nor the id.
@@ -930,7 +944,7 @@ def _apply_unit_conversions(c: Ctx, store_id: str, items: list[dict]) -> list[di
         material_id = (item.get("match") or {}).get("material_id")
         if material_id and material_id in materials:
             match = item["match"]
-            item = apply_unit_conversion(item, materials[material_id]["unit"])
+            item = apply_material_conversion(item, materials[material_id])
             item["match"] = match
         out.append(item)
     return out
@@ -965,7 +979,7 @@ def convert_unit_for_material(store_id: str, item: dict, material_id: str,
     mat = materials.get(material_id)
     if not mat:
         raise HTTPException(404, "ไม่พบวัตถุดิบนี้")
-    converted = apply_unit_conversion(item, mat.get("unit", ""))
+    converted = apply_material_conversion(item, mat)
     if converted.get("price") is None:
         suggested = c.ledger.average_cost(store_id, material_id)
         if suggested is not None:
@@ -1953,6 +1967,11 @@ def get_recipe(store_id: str, item_name: str, c: Ctx = Depends(store_ctx)):
 @app.put("/api/{store_id}/recipes/{item_name}")
 def set_recipe(store_id: str, item_name: str, ingredients: list[dict],
                c: Ctx = Depends(store_ctx)):
+    try:
+        from core.material_quality import validate_recipe
+        ingredients = validate_recipe(ingredients)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     c.store.set_recipe(store_id, item_name, ingredients)
     # A confirmed recipe supersedes its draft - leaving the draft around
     # would offer the same suggestion again over a recipe that's now real.

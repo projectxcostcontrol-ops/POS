@@ -12,7 +12,14 @@ export function StoreProvider({ children }) {
     setLoading(true);
     return api.getStores().then((list) => {
       setStores(list);
-      setStoreId((current) => current || (list.length > 0 ? list[0].id : ''));
+      setStoreId((current) => {
+        const next = list.some((store) => store.id === current)
+          ? current
+          : (list.length > 0 ? list[0].id : '');
+        if (next) localStorage.setItem('activeStoreId', next);
+        else localStorage.removeItem('activeStoreId');
+        return next;
+      });
       setLoading(false);
       return list;
     }).catch(() => {

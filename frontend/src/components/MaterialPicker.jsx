@@ -54,7 +54,8 @@ export default function MaterialPicker({ materials, value, onChange, storeId, on
       // No cost here on purpose - unit cost comes from what this very
       // delivery charged, which the row's price field is about to record.
       await api.upsertMaterial(storeId, id, {
-        name, unit: unit.trim(), par_level: 0,
+        name, unit: unit.trim(), par: 0, category: 'ingredient',
+        purchase_unit: unit.trim(), purchase_to_stock: 1,
       });
       await onCreated();     // refresh the list in the parent
       onChange(id);

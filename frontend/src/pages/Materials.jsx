@@ -5,7 +5,24 @@ import { useAuth } from '../auth/AuthContext';
 import { newId } from '../util/ids';
 import SetupGate from '../components/SetupGate';
 
-const UNITS = ['กรัม', 'กก.', 'มล.', 'ลิตร', 'ชิ้น', 'ขวด'];
+const UNITS = ['กรัม', 'กก.', 'มล.', 'ลิตร', 'ชิ้น', 'ขวด', 'ฟอง', 'ถุง', 'แพ็ค', 'กล่อง', 'ลัง', 'ตัว', 'คน', 'ชุด', 'กระสอบ'];
+const CATEGORIES = [
+  { value: 'ingredient', label: 'วัตถุดิบอาหาร' },
+  { value: 'drink', label: 'เครื่องดื่ม' },
+  { value: 'packaging', label: 'บรรจุภัณฑ์' },
+  { value: 'consumable', label: 'ของใช้สิ้นเปลือง' },
+];
+
+function standardConversion(purchaseUnit, stockUnit) {
+  const factors = {
+    'กก.>กรัม': 1000,
+    'กรัม>กก.': 0.001,
+    'ลิตร>มล.': 1000,
+    'มล.>ลิตร': 0.001,
+  };
+  if (purchaseUnit === stockUnit) return 1;
+  return factors[`${purchaseUnit}>${stockUnit}`] ?? null;
+}
 
 export default function Materials() {
   const { storeId } = useStore();
@@ -19,6 +36,7 @@ export default function Materials() {
   const [adjustReason, setAdjustReason] = useState('กรอกผิด');
   const [adjustVal, setAdjustVal] = useState('');
   const [historyFor, setHistoryFor] = useState(null);
+  const [error, setError] = useState('');
 
   function load() {
     if (!storeId) return;
@@ -39,7 +57,8 @@ export default function Materials() {
     const stock = m.stock ?? 0;
     if (stock < 0) return { label: 'ติดลบ - ตรวจสอบ', color: 'var(--text-danger)' };
     if (stock === 0) return { label: 'หมด', color: 'var(--text-danger)' };
-    if (stock <= (m.par || 0)) return { label: 'ต่ำกว่าที่ควรมี', color: 'var(--text-warning)' };
+    if (!(Number(m.par) > 0)) return { label: 'ยังไม่ได้ตั้งจำนวนที่ควรมี', color: 'var(--text-warning)' };
+    if (stock <= Number(m.par)) return { label: 'ต่ำกว่าที่ควรมี', color: 'var(--text-warning)' };
     return { label: 'ปกติ', color: 'var(--text-muted)' };
   }
 
@@ -56,16 +75,32 @@ export default function Materials() {
 
   const negatives = materials.filter((m) => (m.stock ?? 0) < 0);
   const totalValue = materials.reduce((s, m) => s + Math.max(0, m.stock ?? 0) * (m.cost || 0), 0);
-  const lowCount = materials.filter((m) => (m.stock ?? 0) <= (m.par || 0)).length;
+  const lowCount = materials.filter((m) => Number(m.par) > 0 && (m.stock ?? 0) <= Number(m.par)).length;
+  const unsetParCount = materials.filter((m) => !(Number(m.par) > 0)).length;
+  const qualityIssues = materials.flatMap((m) => {
+    const issues = [];
+    const costPerKg = m.unit === 'กรัม' ? Number(m.cost || 0) * 1000
+      : m.unit === 'กก.' ? Number(m.cost || 0) : null;
+    if (/ค่าแรง|เงินเดือน|ค่าจ้าง/.test(m.name || '')) issues.push(`${m.name}: ดูเหมือนเป็นค่าใช้จ่าย ไม่ใช่วัตถุดิบ`);
+    if (costPerKg !== null && costPerKg > 5000) issues.push(`${m.name}: ต้นทุนเทียบเท่า ฿${costPerKg.toLocaleString()}/กก.`);
+    return issues;
+  });
 
   async function saveEdit(form) {
-    const id = editing.id || newId();
-    await api.upsertMaterial(storeId, id, {
-      name: form.name, unit: form.unit, cost: parseFloat(form.cost) || 0,
-      par: parseFloat(form.par) || 0,
-    });
-    setEditing(null);
-    load();
+    try {
+      setError('');
+      const id = editing.id || newId();
+      await api.upsertMaterial(storeId, id, {
+        name: form.name, unit: form.unit, cost: parseFloat(form.cost) || 0,
+        par: parseFloat(form.par) || 0, category: form.category,
+        purchase_unit: form.purchase_unit || form.unit,
+        purchase_to_stock: parseFloat(form.purchase_to_stock) || 1,
+      });
+      setEditing(null);
+      load();
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   async function saveAdjust() {
@@ -81,6 +116,7 @@ export default function Materials() {
         <p style={{ fontSize: 15, fontWeight: 500, margin: 0 }}>ของในครัว</p>
         <button onClick={() => setEditing({})}>+ เพิ่มวัตถุดิบ</button>
       </div>
+      {error && <p style={{ fontSize: 12, color: 'var(--text-danger)', margin: '0 0 12px' }}>{error}</p>}
 
       {negatives.length > 0 && (
         <div style={{
@@ -91,6 +127,17 @@ export default function Materials() {
           <div style={{ fontSize: 12, marginTop: 4 }}>
             แปลว่าสูตรอาจใส่ปริมาณมากเกินจริง หรือยังไม่ได้บันทึกของที่ซื้อเข้ามา — ตรวจสอบแล้วเช็กสต๊อกใหม่
           </div>
+        </div>
+      )}
+
+      {qualityIssues.length > 0 && (
+        <div style={{
+          background: '#fdf3e3', border: '1px solid var(--text-warning)', borderRadius: 8,
+          padding: '10px 14px', marginBottom: 16, fontSize: 12, color: 'var(--text-warning)',
+        }}>
+          <b>พบข้อมูลที่ควรตรวจสอบ {qualityIssues.length} รายการ</b>
+          {qualityIssues.slice(0, 3).map((issue) => <div key={issue} style={{ marginTop: 4 }}>• {issue}</div>)}
+          {qualityIssues.length > 3 && <div style={{ marginTop: 4 }}>และอีก {qualityIssues.length - 3} รายการ</div>}
         </div>
       )}
 
@@ -107,6 +154,12 @@ export default function Materials() {
           <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 6px' }}>ต่ำกว่าที่ควรมี</p>
           <p style={{ fontSize: 24, fontWeight: 500, margin: 0, color: lowCount ? 'var(--text-warning)' : undefined }}>
             {lowCount}
+          </p>
+        </div>
+        <div className="stat-card">
+          <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 6px' }}>ยังไม่ตั้งระดับที่ควรมี</p>
+          <p style={{ fontSize: 24, fontWeight: 500, margin: 0, color: unsetParCount ? 'var(--text-warning)' : undefined }}>
+            {unsetParCount}
           </p>
         </div>
       </div>
@@ -264,7 +317,24 @@ function EditModal({ material, onCancel, onSave }) {
   const [form, setForm] = useState({
     name: material.name || '', unit: material.unit || UNITS[0],
     cost: material.cost ?? 0, par: material.par ?? 0,
+    category: material.category || 'ingredient',
+    purchase_unit: material.purchase_unit || material.unit || UNITS[0],
+    purchase_to_stock: material.purchase_to_stock ?? 1,
   });
+  const cost = Number(form.cost) || 0;
+  const conversion = Number(form.purchase_to_stock) || 0;
+  const unitsDiffer = form.purchase_unit !== form.unit;
+  const standardFactor = standardConversion(form.purchase_unit, form.unit);
+  const conversionUnconfirmed = unitsDiffer && conversion === 1 && standardFactor === null;
+  const costPerKg = form.unit === 'กรัม' ? cost * 1000 : form.unit === 'กก.' ? cost : null;
+  const warnings = [];
+  if (!form.name.trim()) warnings.push('กรุณาระบุชื่อวัตถุดิบ');
+  if (conversion <= 0) warnings.push('อัตราแปลงต้องมากกว่า 0');
+  if (conversionUnconfirmed) warnings.push(`หน่วยซื้อ “${form.purchase_unit}” ไม่ตรงกับหน่วยสต๊อก “${form.unit}” กรุณาระบุอัตราแปลงที่ถูกต้อง`);
+  if (cost < 0 || Number(form.par) < 0) warnings.push('ต้นทุนและจำนวนที่ควรมีต้องไม่ติดลบ');
+  if (costPerKg !== null && costPerKg > 5000) warnings.push(`ต้นทุนเทียบเท่า ฿${costPerKg.toLocaleString()}/กก. สูงผิดปกติ กรุณาตรวจหน่วยอีกครั้ง`);
+  if (form.unit === 'กรัม' && cost >= 10) warnings.push('ราคาต่อกรัมสูงผิดปกติ คุณอาจต้องการเลือกหน่วย “กก.”');
+  const canSave = warnings.length === 0;
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
@@ -274,11 +344,57 @@ function EditModal({ material, onCancel, onSave }) {
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ชื่อวัตถุดิบ</label>
         <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
           style={{ width: '100%', margin: '4px 0 12px' }} />
+        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ประเภท</label>
+        <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}
+          style={{ width: '100%', margin: '4px 0 12px' }}>
+          {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </select>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>หน่วยวัด</label>
-        <select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}
+        <select value={form.unit} onChange={(e) => {
+          const unit = e.target.value;
+          const suggested = standardConversion(form.purchase_unit, unit);
+          setForm({ ...form, unit, purchase_to_stock: suggested ?? form.purchase_to_stock });
+        }}
           style={{ width: '100%', margin: '4px 0 12px' }}>
           {UNITS.map((u) => <option key={u}>{u}</option>)}
         </select>
+        <div style={{ background: 'var(--surface-1)', borderRadius: 8, padding: 10, marginBottom: 12 }}>
+          <p style={{ fontSize: 11.5, fontWeight: 600, margin: '0 0 8px' }}>การแปลงหน่วยตอนซื้อ</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 72px 1fr', gap: 6, alignItems: 'center' }}>
+            <select value={form.purchase_unit} onChange={(e) => {
+              const purchase_unit = e.target.value;
+              const suggested = standardConversion(purchase_unit, form.unit);
+              setForm({ ...form, purchase_unit, purchase_to_stock: suggested ?? 1 });
+            }}
+              style={{ minWidth: 0, fontSize: 12 }}>
+              {UNITS.map((u) => <option key={u}>{u}</option>)}
+            </select>
+            <input type="number" min="0" step="any" value={form.purchase_to_stock}
+              onChange={(e) => setForm({ ...form, purchase_to_stock: e.target.value })}
+              style={{ minWidth: 0, fontSize: 12 }} />
+            <span style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>{form.unit}</span>
+          </div>
+          <p style={{ fontSize: 10.5, color: 'var(--text-muted)', margin: '6px 0 0' }}>
+            1 {form.purchase_unit} = {form.purchase_to_stock || '?'} {form.unit} เช่น 1 ถุง = 5,000 กรัม
+          </p>
+          <div style={{
+            marginTop: 8, padding: '8px 9px', borderRadius: 7, fontSize: 11.5,
+            background: conversionUnconfirmed ? '#fdf3e3' : unitsDiffer ? '#edf6ed' : 'var(--surface-2)',
+            color: conversionUnconfirmed ? 'var(--text-warning)'
+              : unitsDiffer ? 'var(--text-success)' : 'var(--text-secondary)',
+          }}>
+            {conversionUnconfirmed
+              ? `⚠ หน่วยไม่ตรงกัน — ระบุว่า 1 ${form.purchase_unit} มีกี่ ${form.unit}`
+              : unitsDiffer
+                ? `✓ ระบบจะแปลง 1 ${form.purchase_unit} เป็น ${conversion.toLocaleString()} ${form.unit} อัตโนมัติเมื่อรับของ`
+                : `หน่วยซื้อและหน่วยสต๊อกตรงกัน ไม่ต้องแปลงหน่วย`}
+            {unitsDiffer && !conversionUnconfirmed && cost > 0 && (
+              <div style={{ marginTop: 3 }}>
+                ต้นทุนเทียบเท่าต่อ 1 {form.purchase_unit}: ฿{(cost * conversion).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </div>
+            )}
+          </div>
+        </div>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>ต้นทุนตั้งต้น (บาท/หน่วย)</label>
         <input type="number" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })}
           style={{ width: '100%', margin: '4px 0 4px' }} />
@@ -288,9 +404,15 @@ function EditModal({ material, onCancel, onSave }) {
         <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>จำนวนที่ควรมีสต๊อก (par)</label>
         <input type="number" value={form.par} onChange={(e) => setForm({ ...form, par: e.target.value })}
           style={{ width: '100%', margin: '4px 0 16px' }} />
+        {warnings.length > 0 && (
+          <div style={{ background: '#fdf3e3', border: '1px solid var(--text-warning)', borderRadius: 8,
+            padding: '9px 11px', marginBottom: 12, fontSize: 11.5, color: 'var(--text-warning)' }}>
+            {warnings.map((w) => <div key={w}>• {w}</div>)}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button onClick={onCancel}>ยกเลิก</button>
-          <button style={{ background: 'var(--surface-1)' }} onClick={() => onSave(form)}>บันทึก</button>
+          <button style={{ background: 'var(--surface-1)' }} onClick={() => onSave(form)} disabled={!canSave}>บันทึก</button>
         </div>
       </div>
     </div>

@@ -6,6 +6,14 @@ import MaterialPicker from '../components/MaterialPicker';
 import { newId } from '../util/ids';
 import SetupGate from '../components/SetupGate';
 
+const STANDARD_UNITS = {
+  'กรัม': [{ unit: 'กรัม', factor: 1 }, { unit: 'ขีด', factor: 100 }, { unit: 'กก.', factor: 1000 }],
+  'กก.': [{ unit: 'กก.', factor: 1 }, { unit: 'ขีด', factor: 0.1 }, { unit: 'กรัม', factor: 0.001 }],
+  'มล.': [{ unit: 'มล.', factor: 1 }, { unit: 'ลิตร', factor: 1000 }],
+  'ลิตร': [{ unit: 'ลิตร', factor: 1 }, { unit: 'มล.', factor: 0.001 }],
+  'ชิ้น': [{ unit: 'ชิ้น', factor: 1 }, { unit: 'โหล', factor: 12 }],
+};
+
 export default function Receiving() {
   const { storeId } = useStore();
   const [materials, setMaterials] = useState([]);
@@ -236,6 +244,7 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
   const [discarding, setDiscarding] = useState(false);
   const [error, setError] = useState('');
   const [creatingFor, setCreatingFor] = useState(null); // index of item getting a new material
+  const [convertingFor, setConvertingFor] = useState(null);
 
   useEffect(() => setLocalMaterials(materials), [materials]);
 
@@ -311,7 +320,7 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
     return null;
   }
 
-  function unitNote(it) {
+  function unitNote(it, idx) {
     const uc = it.unit_conversion;
     if (!uc) return null;
     if (uc.status === 'converted') {
@@ -320,9 +329,17 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
       </p>;
     }
     if (uc.status === 'unconvertible' || uc.status === 'unrecognized') {
-      return <p style={{ fontSize: 11, color: 'var(--text-warning)', margin: '2px 0 0' }}>
-        ⚠ หน่วยไม่ตรงกับคลัง ({it.unit} ≠ {uc.target_unit}) - เช็คจำนวนก่อน Confirm
-      </p>;
+      return <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0 0' }}>
+        <span style={{ flex: 1, fontSize: 11, color: 'var(--text-warning)' }}>
+          ⚠ หน่วยในบิล “{it.unit || 'ไม่ระบุ'}” ไม่ตรงกับหน่วยสต๊อก “{uc.target_unit}”
+        </span>
+        {it.match?.material_id && (
+          <button type="button" onClick={() => setConvertingFor(idx)}
+            style={{ fontSize: 11, padding: '5px 9px', background: 'var(--accent)', color: '#fff' }}>
+            แปลงหน่วย
+          </button>
+        )}
+      </div>;
     }
     return null;
   }
@@ -372,7 +389,7 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
           }}>
             {unmatchedCount > 0 && <div>{unmatchedCount} รายการยังไม่ได้เลือกวัตถุดิบ</div>}
             {lowConfidenceCount > 0 && <div>{lowConfidenceCount} รายการ AI มั่นใจต่ำ - ตรวจตัวเลขอีกรอบ</div>}
-            {unitIssueCount > 0 && <div>{unitIssueCount} รายการหน่วยไม่ตรงกับคลัง - เช็คจำนวนเอง</div>}
+            {unitIssueCount > 0 && <div>{unitIssueCount} รายการหน่วยไม่ตรงกับสต๊อก - กด “แปลงหน่วย” ก่อนยืนยัน</div>}
             {missingPriceCount > 0 && <div style={{ color: 'var(--text-danger)' }}>{missingPriceCount} รายการไม่มีราคา - ต้องกรอกก่อน Confirm</div>}
           </div>
         )}
@@ -422,7 +439,7 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
                   style={{ fontSize: 14, padding: '4px 5px', color: 'var(--text-muted)' }}>×</button>
               </div>
               {priceNote(it)}
-              {unitNote(it)}
+              {unitNote(it, idx)}
 
               {matched ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
@@ -485,10 +502,110 @@ function DraftReview({ draft, materials, storeId, onClose, onDone }) {
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={onClose}>ปิด</button>
             <button style={{ background: 'var(--surface-1)' }} onClick={saveEditsThenConfirm}
-              disabled={confirming || discarding}>
+              disabled={confirming || discarding || unitIssueCount > 0}>
               {confirming ? 'กำลังยืนยัน...' : 'Confirm เข้าสต๊อก'}
             </button>
           </div>
+        </div>
+        {convertingFor !== null && (
+          <UnitConversionModal
+            item={items[convertingFor]}
+            material={localMaterials.find((m) => m.id === items[convertingFor]?.match?.material_id)}
+            onCancel={() => setConvertingFor(null)}
+            onConfirm={async ({ factor, remember }) => {
+              const idx = convertingFor;
+              const item = items[idx];
+              const material = localMaterials.find((m) => m.id === item.match.material_id);
+              const converted = {
+                ...item,
+                qty: (Number(item.qty) || 0) * factor,
+                price: item.price == null ? null : Number(item.price) / factor,
+                unit: material.unit,
+                unit_conversion: {
+                  status: 'converted', source: 'manual', factor,
+                  original_qty: item.qty, original_unit: item.unit, target_unit: material.unit,
+                },
+              };
+              updateItem(idx, converted);
+              if (remember) {
+                const previous = material.purchase_conversions || [];
+                const next = [
+                  ...previous.filter((row) => String(row?.label || '').toLowerCase() !== String(item.unit || '').toLowerCase()),
+                  { label: item.unit, factor },
+                ];
+                await api.upsertMaterial(storeId, material.id, {
+                  name: material.name, unit: material.unit, cost: material.cost || 0,
+                  par: material.par || 0, category: material.category || 'ingredient',
+                  purchase_unit: material.purchase_unit || material.unit,
+                  purchase_to_stock: material.purchase_to_stock || 1,
+                  purchase_conversions: next,
+                });
+                setLocalMaterials((current) => current.map((m) =>
+                  m.id === material.id ? { ...m, purchase_conversions: next } : m));
+              }
+              setConvertingFor(null);
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UnitConversionModal({ item, material, onCancel, onConfirm }) {
+  const options = STANDARD_UNITS[material?.unit] || [{ unit: material?.unit || '', factor: 1 }];
+  const [amount, setAmount] = useState(1);
+  const [standardUnit, setStandardUnit] = useState(options[0]?.unit || '');
+  const [remember, setRemember] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const selected = options.find((option) => option.unit === standardUnit) || options[0];
+  const factor = (Number(amount) || 0) * (selected?.factor || 0);
+  const convertedQty = (Number(item?.qty) || 0) * factor;
+  const convertedPrice = factor > 0 && item?.price != null ? Number(item.price) / factor : null;
+
+  return (
+    <div className="modal-overlay" style={{ zIndex: 90 }} onClick={onCancel}>
+      <div className="modal-box" style={{ width: 390, maxWidth: '92vw' }} onClick={(e) => e.stopPropagation()}>
+        <p style={{ fontSize: 15, fontWeight: 600, margin: '0 0 4px' }}>แปลงหน่วย</p>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 14px' }}>
+          {material?.name}: หน่วยในบิล “{item?.unit}” → สต๊อก “{material?.unit}”
+        </p>
+
+        <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          1 {item?.unit} เท่ากับ
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: '5px 0 12px' }}>
+          <input type="number" min="0" step="any" value={amount}
+            onChange={(e) => setAmount(e.target.value)} />
+          <select value={standardUnit} onChange={(e) => setStandardUnit(e.target.value)}>
+            {options.map((option) => <option key={option.unit}>{option.unit}</option>)}
+          </select>
+        </div>
+
+        <div style={{ background: factor > 0 ? '#edf6ed' : '#fdf3e3', borderRadius: 8,
+          padding: '10px 12px', fontSize: 12, lineHeight: 1.6,
+          color: factor > 0 ? 'var(--text-success)' : 'var(--text-warning)' }}>
+          {factor > 0 ? (
+            <>
+              <div>1 {item?.unit} = {factor.toLocaleString()} {material?.unit}</div>
+              <div>{item?.qty} {item?.unit} → เข้าสต๊อก {convertedQty.toLocaleString()} {material?.unit}</div>
+              {convertedPrice !== null && <div>ต้นทุน ฿{convertedPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}/{material?.unit}</div>}
+            </>
+          ) : 'กรุณาระบุจำนวนที่มากกว่า 0'}
+        </div>
+
+        <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12,
+          fontSize: 11.5, color: 'var(--text-secondary)' }}>
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          <span>จำว่า “{item?.unit}” ของ {material?.name} ใช้อัตรานี้ ครั้งถัดไปแปลงให้อัตโนมัติ</span>
+        </label>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button onClick={onCancel}>ยกเลิก</button>
+          <button disabled={factor <= 0 || saving} style={{ background: 'var(--accent)', color: '#fff' }}
+            onClick={async () => { setSaving(true); try { await onConfirm({ factor, remember }); } finally { setSaving(false); } }}>
+            {saving ? 'กำลังบันทึก...' : 'ยืนยันการแปลง'}
+          </button>
         </div>
       </div>
     </div>
